@@ -1,0 +1,37 @@
+{
+  "name": "prisma-bun-adapter-test-app",
+  "version": "1.0.0",
+  "description": "Test app for Prisma Bun PostgreSQL adapter",
+  "main": "index.ts",
+  "scripts": {
+    "setup": "bun run setup.ts",
+    "validate": "bun run validate.ts",
+    "dev": "bun run index.ts",
+    "test": "bun run comprehensive-test.ts",
+    "test:compare": "bun run adapter-comparison-test.ts",
+    "perf:compare": "bun run performance-comparison.ts",
+    "perf:profile": "bun run detailed-profiling.ts",
+    "perf:cold": "bun run first-query-analysis.ts",
+    "perf:simple": "bun run simple-perf-test.ts",
+    "perf:concurrent": "bun run concurrent-benchmark.ts",
+    "perf:realistic": "bun run realistic-concurrent-test.ts",
+    "perf:connections": "bun run connection-efficiency-test.ts",
+    "db:up": "docker-compose up -d",
+    "db:down": "docker-compose down",
+    "db:migrate": "bunx prisma migrate dev",
+    "db:generate": "bunx prisma generate",
+    "db:reset": "bunx prisma migrate reset --force",
+    "db:seed": "bun run seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.17.1",
+    "@prisma/adapter-pg": "^6.17.1",
+    "pg": "^8.11.3",
+    "prisma-bun-postgres-adapter": "file:../"
+  },
+  "devDependencies": {
+    "prisma": "^6.17.1",
+    "@types/bun": "latest",
+    "@types/pg": "^8.10.9"
+  }
+}
