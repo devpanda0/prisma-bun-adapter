@@ -1,11 +1,31 @@
 {
-  "name": "prisma-bun-adapter",
-  "version": "1.0.0",
+  "name": "@abcx3/prisma-bun-adapter",
+  "version": "1.0.3",
   "description": "Prisma adapters for Bun's native SQL clients (PostgreSQL, MySQL, SQLite)",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./optimized": {
+      "types": "./dist/optimized-index.d.ts",
+      "import": "./dist/optimized-index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "INSTALL.md",
+    "MIGRATION_SUMMARY.md",
+    "PERFORMANCE_COMPARISON.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target node",
+    "build": "tsc -p tsconfig.json",
     "dev": "bun --watch src/index.ts",
     "test": "bun test",
     "test:multi": "bun run test-app/multi-adapter-comparison.ts",
@@ -13,12 +33,31 @@
     "test:performance": "bun run test-app/performance-comparison.ts",
     "demo:sqlite": "bun run test-app/sqlite-comparison-demo.ts",
     "demo:quick": "bun run test-app/quick-comparison-demo.ts",
+    "db:start": "bun run test-app/setup-test-dbs.ts start",
+    "db:stop": "bun run test-app/setup-test-dbs.ts stop",
+    "db:restart": "bun run db:stop && bun run db:start",
     "setup:dbs": "bun run test-app/setup-test-dbs.ts",
-    "setup:dbs:stop": "bun run test-app/setup-test-dbs.ts stop"
+    "setup:dbs:stop": "bun run test-app/setup-test-dbs.ts stop",
+    "prepublishOnly": "bun run build"
   },
-  "keywords": ["prisma", "bun", "postgresql", "mysql", "sqlite", "adapter"],
+  "keywords": [
+    "prisma",
+    "bun",
+    "postgresql",
+    "mysql",
+    "sqlite",
+    "adapter"
+  ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/prisma-bun-adapter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/prisma-bun-adapter/issues"
+  },
+  "homepage": "https://github.com/your-username/prisma-bun-adapter#readme",
   "peerDependencies": {
     "@prisma/client": "^6.0.0"
   },
@@ -36,5 +75,12 @@
     "@prisma/adapter-planetscale": "^6.17.1",
     "mysql2": "^3.6.5",
     "better-sqlite3": "^9.2.2"
+  },
+  "engines": {
+    "node": ">=18",
+    "bun": ">=1.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

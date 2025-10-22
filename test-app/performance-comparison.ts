@@ -198,8 +198,11 @@ async function runBenchmark(config: AdapterConfig, operations: number = 100): Pr
     
     // Run benchmark operations
     const promises = [];
+    const isPostgres = config.provider === "postgresql";
+    const param = isPostgres ? "$1" : "?";
+    const benchmarkSql = `SELECT ${param} as iteration`;
     for (let i = 0; i < operations; i++) {
-      promises.push(adapter.query("SELECT ? as iteration", [i]));
+      promises.push(adapter.query(benchmarkSql, [i]));
     }
     
     await Promise.all(promises);
@@ -222,6 +225,9 @@ async function runBenchmark(config: AdapterConfig, operations: number = 100): Pr
       success: true
     };
   } catch (error) {
+    const isPostgres = config.provider === "postgresql";
+    const param = isPostgres ? "$1" : "?";
+    const failingSql = `SELECT ${param} as iteration`;
     return {
       adapter: config.name,
       type: config.type,
@@ -231,7 +237,9 @@ async function runBenchmark(config: AdapterConfig, operations: number = 100): Pr
       avgTime: 0,
       opsPerSecond: 0,
       success: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error
+        ? `${error.message} | SQL: ${failingSql}`
+        : String(error)
     };
   }
 }

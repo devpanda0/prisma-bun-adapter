@@ -102,7 +102,8 @@ async function startDatabase(db: DatabaseConfig): Promise<boolean> {
       .flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 
     // Start the container
-    await $`docker run --name ${db.containerName} ${envArgs} -p ${db.port}:${db.port} -d ${db.image}`.quiet();
+    const internalPort = db.name === "PostgreSQL" ? 5432 : db.port;
+    await $`docker run --name ${db.containerName} ${envArgs} -p ${db.port}:${internalPort} -d ${db.image}`.quiet();
 
     // Wait for the database to be ready
     console.log(`  ⏳ Waiting for ${db.name} to be ready...`);

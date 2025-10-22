@@ -46,7 +46,7 @@ interface BunSqlTransaction {
 // Cache for template strings to avoid repeated parsing
 const templateCache = new Map<
   string,
-  { strings: TemplateStringsArray; paramCount: number }
+  { strings: TemplateStringsArray; paramCount: number; argOrder: number[] }
 >();
 
 // Pre-compiled column type matchers for better performance
@@ -108,7 +108,122 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       );
     }
 
-    return new BunSQL(this.connectionString) as BunSqlConnection;
+    const candidates = this.buildPgConnectionCandidates(this.connectionString);
+    let lastErr: any = null;
+    for (const candidate of candidates) {
+      try {
+        const conn = new BunSQL(candidate) as BunSqlConnection;
+        try {
+          const strings = this.createTemplateStrings(['SELECT 1']);
+          await conn(strings);
+          return conn;
+        } catch (warmErr: any) {
+          if (this.isPgAuthFailed(warmErr)) { lastErr = warmErr; continue; }
+          throw warmErr;
+        }
+      } catch (e: any) {
+        lastErr = e; continue;
+      }
+    }
+    if (lastErr && (lastErr instanceof URIError || (typeof lastErr?.message === 'string' && /uri/i.test(lastErr.message)))) {
+      throw new Error("Invalid DATABASE_URL/connectionString. Check URL shape; credentials are auto-encoded by the adapter.");
+    }
+    throw lastErr ?? new Error('Failed to establish Postgres connection');
+  }
+
+  private isPgAuthFailed(err: any): boolean {
+    const msg = String(err?.message ?? '').toLowerCase();
+    return msg.includes('password authentication failed') || msg.includes('28p01');
+  }
+
+  private buildPgConnectionCandidates(input: string): string[] {
+    const raw = String(input ?? '').trim();
+    const norm = (() => {
+      // Same normalization as before
+      if (!raw) return raw;
+      try {
+        const u = new URL(raw);
+        const scheme = u.protocol.replace(':', '');
+        if (["postgres", "postgresql"].includes(scheme)) {
+          // Avoid double-encoding: decode valid %HH triplets first, then encode
+          const decodeTriplets = (s: string) => s.replace(/%[0-9a-fA-F]{2}/g, (m) => {
+            try { return decodeURIComponent(m); } catch { return m; }
+          });
+          if (u.username) u.username = encodeURIComponent(decodeTriplets(u.username));
+          if (u.password) u.password = encodeURIComponent(decodeTriplets(u.password));
+          return u.toString();
+        }
+        return raw;
+      } catch {}
+      const m = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
+      if (!m) return raw;
+      const scheme = m[1];
+      const start = m[0].length;
+      const rest = raw.slice(start);
+      let boundary = rest.length;
+      for (const sep of ['/', '?', '#']) {
+        const idx = rest.indexOf(sep);
+        if (idx !== -1 && idx < boundary) boundary = idx;
+      }
+      const authority = rest.slice(0, boundary);
+      const tail = rest.slice(boundary);
+      const at = authority.lastIndexOf('@');
+      if (at === -1) return raw;
+      const userinfo = authority.slice(0, at);
+      const hostport = authority.slice(at + 1);
+      const colon = userinfo.indexOf(':');
+      const userRaw = colon === -1 ? userinfo : userinfo.slice(0, colon);
+      const passRaw = colon === -1 ? '' : userinfo.slice(colon + 1);
+      const safeDecode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+      const username = encodeURIComponent(safeDecode(userRaw));
+      const password = passRaw !== '' ? encodeURIComponent(safeDecode(passRaw)) : '';
+      const rebuiltAuthority = password ? `${username}:${password}@${hostport}` : `${username}@${hostport}`;
+      return `${scheme}://${rebuiltAuthority}${tail}`;
+    })();
+
+    const out: string[] = [];
+    if (norm) out.push(norm);
+    if (raw && raw !== norm) out.push(raw);
+    const qp = this.toPgPasswordQueryVariant(raw);
+    if (qp) out.push(qp);
+    return out;
+  }
+
+  private toPgPasswordQueryVariant(raw: string): string | null {
+    const m = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
+    if (!m) return null;
+    const scheme = m[1];
+    if (!['postgres', 'postgresql'].includes(scheme)) return null;
+    const start = m[0].length;
+    const rest = raw.slice(start);
+    let boundary = rest.length;
+    for (const sep of ['/', '?', '#']) {
+      const idx = rest.indexOf(sep);
+      if (idx !== -1 && idx < boundary) boundary = idx;
+    }
+    const authority = rest.slice(0, boundary);
+    const tail = rest.slice(boundary);
+    const at = authority.lastIndexOf('@');
+    if (at === -1) return null;
+    const userinfo = authority.slice(0, at);
+    const hostport = authority.slice(at + 1);
+    const colon = userinfo.indexOf(':');
+    const userRaw = colon === -1 ? userinfo : userinfo.slice(0, colon);
+    const passRaw = colon === -1 ? '' : userinfo.slice(colon + 1);
+    if (!passRaw) return null;
+    const safeDecode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
+    const username = encodeURIComponent(safeDecode(userRaw));
+    const passwordRaw = safeDecode(passRaw);
+    let path = tail;
+    let existingQuery = '';
+    const qIdx = tail.indexOf('?');
+    if (qIdx !== -1) {
+      path = tail.slice(0, qIdx);
+      existingQuery = tail.slice(qIdx + 1);
+    }
+    const join = existingQuery ? '&' : '?';
+    const finalQuery = `${existingQuery ? '?' + existingQuery : ''}${join}password=${encodeURIComponent(passwordRaw)}`;
+    return `${scheme}://${username}@${hostport}${path}${finalQuery}`;
   }
 
   async dispose(): Promise<void> {
@@ -157,14 +272,9 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       const columnCount = columnNames.length;
       const rowCount = result.length;
 
-      // Pre-allocate the result arrays
-      const columnTypes = new Array(columnCount);
+      // Determine column types using a scan to better detect JSON columns
+      const columnTypes = this.determineColumnTypes(result, columnNames);
       const rows = new Array(rowCount);
-
-      // Process first row to determine column types
-      for (let i = 0; i < columnCount; i++) {
-        columnTypes[i] = this.inferColumnTypeFast(firstRow[columnNames[i]]);
-      }
 
       // Process all rows efficiently
       for (let rowIndex = 0; rowIndex < rowCount; rowIndex++) {
@@ -172,9 +282,11 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
         const processedRow = new Array(columnCount);
 
         for (let colIndex = 0; colIndex < columnCount; colIndex++) {
-          processedRow[colIndex] = this.serializeValueFast(
-            row[columnNames[colIndex]]
-          );
+          const val = row[columnNames[colIndex]];
+          processedRow[colIndex] =
+            columnTypes[colIndex] === ColumnTypeEnum.Json
+              ? this.ensureJsonString(val)
+              : this.serializeValueFast(val);
         }
 
         rows[rowIndex] = processedRow;
@@ -217,25 +329,37 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     const cacheKey = sql;
     let cached = templateCache.get(cacheKey);
 
-    if (!cached && sql.includes("$1")) {
+    if ((!cached || cached.paramCount !== args.length) && (sql.includes("$1"))) {
       // Parse and cache the template
       let templateSql = sql;
       const paramCount = args.length;
 
       // More efficient parameter replacement
-      for (let i = 0; i < paramCount; i++) {
-        templateSql = templateSql.replaceAll(`$${i + 1}`, `\${${i}}`);
+      if (sql.includes("$1")) {
+        for (let n = paramCount; n >= 1; n--) {
+          const idx = n - 1;
+          const marker = '${' + idx + '}';
+          templateSql = templateSql.replaceAll(`$${n}`, marker);
+        }
       }
 
       const parts = templateSql.split(/\$\{\d+\}/);
       const strings = this.createTemplateStrings(parts);
+      const argOrder: number[] = [];
+      const re = /\$\{(\d+)\}/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(templateSql)) !== null) {
+        argOrder.push(Number(m[1]));
+      }
 
-      cached = { strings, paramCount };
-      templateCache.set(cacheKey, cached);
+      const built = { strings, paramCount, argOrder };
+      templateCache.set(cacheKey, built);
+      cached = built as any;
     }
 
     if (cached) {
-      return connection(cached.strings, ...args);
+      const expanded = (cached as any).argOrder?.length ? (cached as any).argOrder.map((i: number) => args[i]) : args;
+      return connection(cached.strings, ...expanded);
     }
 
     // Fallback for non-parameterized queries
@@ -285,21 +409,19 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
           const columnNames = Object.keys(firstRow);
           const columnCount = columnNames.length;
 
-          const columnTypes = new Array(columnCount);
+          const columnTypes = this.determineColumnTypes(result, columnNames);
           const rows = new Array(result.length);
-
-          for (let i = 0; i < columnCount; i++) {
-            columnTypes[i] = this.inferColumnTypeFast(firstRow[columnNames[i]]);
-          }
 
           for (let rowIndex = 0; rowIndex < result.length; rowIndex++) {
             const row = result[rowIndex];
             const processedRow = new Array(columnCount);
 
             for (let colIndex = 0; colIndex < columnCount; colIndex++) {
-              processedRow[colIndex] = this.serializeValueFast(
-                row[columnNames[colIndex]]
-              );
+              const val = row[columnNames[colIndex]];
+              processedRow[colIndex] =
+                columnTypes[colIndex] === ColumnTypeEnum.Json
+                  ? this.ensureJsonString(val)
+                  : this.serializeValueFast(val);
             }
 
             rows[rowIndex] = processedRow;
@@ -339,15 +461,22 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
 
     if (sql.includes("$1")) {
       let templateSql = sql;
-
-      for (let i = 0; i < args.length; i++) {
-        templateSql = templateSql.replaceAll(`$${i + 1}`, `\${${i}}`);
+      for (let n = args.length; n >= 1; n--) {
+        const idx = n - 1;
+        const marker = '${' + idx + '}';
+        templateSql = templateSql.replaceAll(`$${n}`, marker);
       }
 
       const parts = templateSql.split(/\$\{\d+\}/);
       const strings = this.createTemplateStrings(parts);
-
-      return tx(strings, ...args);
+      const argOrder: number[] = [];
+      const re = /\$\{(\d+)\}/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(templateSql)) !== null) {
+        argOrder.push(Number(m[1]));
+      }
+      const expanded = argOrder.length ? argOrder.map((i) => args[i]) : args;
+      return tx(strings, ...expanded);
     }
 
     const strings = this.createTemplateStrings([sql]);
@@ -424,7 +553,61 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       return value;
     }
 
-    return value;
+    // Ensure JSON columns arrive as valid JSON strings
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private determineColumnTypes(result: any[], columnNames: string[]): ColumnType[] {
+    const columnCount = columnNames.length;
+    const types = new Array(columnCount) as ColumnType[];
+    for (let i = 0; i < columnCount; i++) {
+      const name = columnNames[i];
+      let isJson = false;
+      for (let r = 0; r < result.length; r++) {
+        const v = result[r][name];
+        if (v === null || v === undefined) continue;
+        const t = typeof v;
+        if (t === 'object') {
+          if (v instanceof Date || Buffer.isBuffer(v)) {
+            // not JSON
+          } else {
+            isJson = true; break;
+          }
+        } else if (t === 'string') {
+          const s = (v as string).trim();
+          if (this.isJsonishString(s)) { isJson = true; break; }
+        }
+      }
+      if (isJson) types[i] = ColumnTypeEnum.Json;
+      else types[i] = this.inferColumnTypeFast(result[0]?.[name]);
+    }
+    return types;
+  }
+
+  private isJsonishString(s: string): boolean {
+    if (!s) return false;
+    const t = s.trim();
+    if (!t) return false;
+    if (t.startsWith('{') || t.startsWith('[')) return true;
+    if (t.startsWith('"') && t.endsWith('"')) return true;
+    return false;
+  }
+
+  private ensureJsonString(value: unknown): string {
+    if (value === null || value === undefined) return 'null';
+    const t = typeof value;
+    if (t === 'string') {
+      const s = value as string;
+      return this.isJsonishString(s) ? s : JSON.stringify(s);
+    }
+    if (t === 'number' || t === 'boolean') return JSON.stringify(value);
+    if (value instanceof Date) return JSON.stringify(value.toISOString());
+    if (Buffer.isBuffer(value)) return JSON.stringify(Array.from(value as unknown as Uint8Array));
+    try { return JSON.stringify(value); } catch { return 'null'; }
   }
 }
 
