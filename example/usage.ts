@@ -7,16 +7,17 @@ async function postgresExample() {
   console.log("🐘 PostgreSQL Example");
   
   const adapter = new BunPostgresAdapter({
-    connectionString: "postgresql://username:password@localhost:5432/database",
+    connectionString: process.env.EXAMPLE_POSTGRES_URL!,
     maxConnections: 10,
     idleTimeout: 30000,
   });
   
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {
+    await prisma.$connect();
     // PostgreSQL uses $1, $2, etc. for parameters
     const result = await prisma.$queryRaw`SELECT 'PostgreSQL' as database_type`;
     console.log("Result:", result);
@@ -29,13 +30,13 @@ async function mysqlExample() {
   console.log("🐬 MySQL Example");
   
   const adapter = new BunMySQLAdapter({
-    connectionString: "mysql://username:password@localhost:3306/database",
+    connectionString: process.env.EXAMPLE_MYSQL_URL!,
     maxConnections: 10,
     idleTimeout: 30000,
   });
   
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {
@@ -51,14 +52,14 @@ async function sqliteExample() {
   console.log("🗃️ SQLite Example");
   
   const adapter = new BunSQLiteAdapter({
-    filename: "./database.sqlite",
+    filename: process.env.EXAMPLE_SQLITE_FILE || "./database.sqlite",
     maxConnections: 1,
     readonly: false,
     create: true,
   });
   
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {

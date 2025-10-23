@@ -139,38 +139,50 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
   private buildPgConnectionCandidates(input: string): string[] {
     const raw = String(input ?? '').trim();
     const norm = (() => {
-      // Same normalization as before
       if (!raw) return raw;
-      try {
-        const u = new URL(raw);
-        const scheme = u.protocol.replace(':', '');
-        if (["postgres", "postgresql"].includes(scheme)) {
-          // Avoid double-encoding: decode valid %HH triplets first, then encode
-          const decodeTriplets = (s: string) => s.replace(/%[0-9a-fA-F]{2}/g, (m) => {
-            try { return decodeURIComponent(m); } catch { return m; }
-          });
-          if (u.username) u.username = encodeURIComponent(decodeTriplets(u.username));
-          if (u.password) u.password = encodeURIComponent(decodeTriplets(u.password));
-          return u.toString();
-        }
-        return raw;
-      } catch {}
+
+      // Heuristic: if unencoded reserved characters appear in userinfo, avoid WHATWG parsing
+      const schemeMatch = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
+      const schemeFromRaw = schemeMatch?.[1];
+      const restFromRaw = schemeMatch ? raw.slice(schemeMatch[0].length) : '';
+      const atInRest = restFromRaw.lastIndexOf('@');
+      const userinfoCandidate = atInRest !== -1 ? restFromRaw.slice(0, atInRest) : '';
+      const hasUnencodedReserved = /[/?#]/.test(userinfoCandidate);
+
+      if (!hasUnencodedReserved) {
+        try {
+          const u = new URL(raw);
+          const scheme = u.protocol.replace(':', '');
+          if (["postgres", "postgresql"].includes(scheme)) {
+            // Avoid double-encoding: decode valid %HH triplets first, then encode
+            const decodeTriplets = (s: string) => s.replace(/%[0-9a-fA-F]{2}/g, (m) => {
+              try { return decodeURIComponent(m); } catch { return m; }
+            });
+            if (u.username) u.username = encodeURIComponent(decodeTriplets(u.username));
+            if (u.password) u.password = encodeURIComponent(decodeTriplets(u.password));
+            return u.toString();
+          }
+          return raw;
+        } catch {}
+      }
+
+      // Manual rewrite tolerant of unencoded reserved in userinfo
       const m = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
       if (!m) return raw;
       const scheme = m[1];
-      const start = m[0].length;
-      const rest = raw.slice(start);
-      let boundary = rest.length;
+      const rest = raw.slice(m[0].length);
+
+      const at = rest.lastIndexOf('@');
+      if (at === -1) return raw;
+      const userinfo = rest.slice(0, at);
+      const hostAndTail = rest.slice(at + 1);
+      let boundary = hostAndTail.length;
       for (const sep of ['/', '?', '#']) {
-        const idx = rest.indexOf(sep);
+        const idx = hostAndTail.indexOf(sep);
         if (idx !== -1 && idx < boundary) boundary = idx;
       }
-      const authority = rest.slice(0, boundary);
-      const tail = rest.slice(boundary);
-      const at = authority.lastIndexOf('@');
-      if (at === -1) return raw;
-      const userinfo = authority.slice(0, at);
-      const hostport = authority.slice(at + 1);
+      const hostport = hostAndTail.slice(0, boundary);
+      const tail = hostAndTail.slice(boundary);
       const colon = userinfo.indexOf(':');
       const userRaw = colon === -1 ? userinfo : userinfo.slice(0, colon);
       const passRaw = colon === -1 ? '' : userinfo.slice(colon + 1);
@@ -194,19 +206,18 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     if (!m) return null;
     const scheme = m[1];
     if (!['postgres', 'postgresql'].includes(scheme)) return null;
-    const start = m[0].length;
-    const rest = raw.slice(start);
-    let boundary = rest.length;
+    const rest = raw.slice(m[0].length);
+    const at = rest.lastIndexOf('@');
+    if (at === -1) return null;
+    const userinfo = rest.slice(0, at);
+    const hostAndTail = rest.slice(at + 1);
+    let boundary = hostAndTail.length;
     for (const sep of ['/', '?', '#']) {
-      const idx = rest.indexOf(sep);
+      const idx = hostAndTail.indexOf(sep);
       if (idx !== -1 && idx < boundary) boundary = idx;
     }
-    const authority = rest.slice(0, boundary);
-    const tail = rest.slice(boundary);
-    const at = authority.lastIndexOf('@');
-    if (at === -1) return null;
-    const userinfo = authority.slice(0, at);
-    const hostport = authority.slice(at + 1);
+    const hostport = hostAndTail.slice(0, boundary);
+    const tail = hostAndTail.slice(boundary);
     const colon = userinfo.indexOf(':');
     const userRaw = colon === -1 ? userinfo : userinfo.slice(0, colon);
     const passRaw = colon === -1 ? '' : userinfo.slice(colon + 1);

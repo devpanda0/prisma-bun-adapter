@@ -37,23 +37,70 @@ const adapter = new BunPostgresAdapter({
 });
 
 const prisma = new PrismaClient({
-  adapter,
+  adapter: adapter,
   log: ["query", "info", "warn", "error"],
 });
 
 await prisma.user.findMany();
 ```
 
+
+
+Use Prisma Like Normal
+----------------------
+
+This adapter integrates with Prisma's driver adapter API. You keep using Prisma Client exactly the same way:
+
+```ts
+// Model delegates work unchanged
+const users = await prisma.user.findMany({
+  where: { email: { contains: "@example.com" } },
+  include: { posts: true },
+});
+
+// Creates, updates, nested writes, include/select, aggregations, etc.
+await prisma.post.create({
+  data: {
+    title: "Hello",
+    author: { connect: { id: 1 } },
+  },
+});
+
+// Interactive transactions work too
+const created = await prisma.$transaction(async (tx) => {
+  const user = await tx.user.create({ data: { email: "a@b.com" } });
+  await tx.post.create({ data: { userId: user.id, title: "Welcome" } });
+  return user;
+});
+```
+
+Service/DI usage (e.g., NestJS): create the client in an async factory and inject it where needed.
+
+```ts
+import { PrismaClient } from "@prisma/client";
+import { BunPostgresAdapter } from "prisma-bun-adapter";
+
+export async function makePrisma() {
+  const adapter = new BunPostgresAdapter(process.env.DATABASE_URL!);
+  return new PrismaClient({ adapter });
+}
+
+// elsewhere
+const prismaService = await makePrisma();
+const rows = await prismaService.user.findMany();
+```
+
 Notes
 -----
 
 - You do not need to percent‑encode special characters in your DB password when using `DATABASE_URL`. The adapter normalizes and encodes credentials automatically so model queries like `prisma.user.findFirst` work regardless of password contents.
+- No query rewrites required: keep using `prisma.<model>.<method>` as usual.
 
 Troubleshooting
 ---------------
 
 - URI error on first model query (e.g., `user.findFirst`): This usually means your `DATABASE_URL` is malformed (e.g., missing scheme/host) or contains a stray character that breaks the URL. The adapter auto‑encodes credentials, but if parsing still fails, verify the URL shape is valid (e.g., `postgresql://user:pass@host:5432/db?sslmode=disable`).
-- Models not accessible: Ensure you ran `prisma generate` after updating your schema, and construct `PrismaClient` with the adapter: `new PrismaClient({ adapter: new BunPostgresAdapter(process.env.DATABASE_URL!) })`. Generated model delegates (e.g., `prisma.user.findFirst`) work normally with this adapter.
+- Models not accessible: Ensure you ran `prisma generate` after updating your schema, and construct `PrismaClient` with the adapter factory, e.g. `new PrismaClient({ adapter: new BunPostgresAdapter(process.env.DATABASE_URL!) })`. Generated model delegates (e.g., `prisma.user.findFirst`) work normally with this adapter.
 
 MySQL (Bun native):
 
@@ -121,6 +168,8 @@ Scripts:
 - `bun run build` – compile TypeScript to `dist/` with declarations
 - `bun run test:performance` – optional performance demo
 - `bun run test:comparison` – optional comparison scripts
+ - `bun run test:bench:prisma-complex` – deep Prisma workloads (Bun vs PrismaPg)
+ - `bun run test:bench:sql-complex` – complex raw SQL (Bun vs pg)
 
 Publishing checklist:
 

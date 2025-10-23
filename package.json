@@ -1,6 +1,6 @@
 {
   "name": "@abcx3/prisma-bun-adapter",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "Prisma adapters for Bun's native SQL clients (PostgreSQL, MySQL, SQLite)",
   "type": "module",
   "main": "dist/index.js",
@@ -8,11 +8,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
     },
     "./optimized": {
       "types": "./dist/optimized-index.d.ts",
-      "import": "./dist/optimized-index.js"
+      "import": "./dist/optimized-index.js",
+      "require": "./dist/optimized-index.js"
     }
   },
   "files": [
@@ -28,9 +30,12 @@
     "build": "tsc -p tsconfig.json",
     "dev": "bun --watch src/index.ts",
     "test": "bun test",
+    "debug:example": "bun --watch example/usage.ts",
     "test:multi": "bun run test-app/multi-adapter-comparison.ts",
     "test:comparison": "bun run test-app/bun-vs-prisma-comparison.ts",
     "test:performance": "bun run test-app/performance-comparison.ts",
+    "test:bench:prisma-complex": "bun run test-app/complex-prisma-benchmarks.ts",
+    "test:bench:sql-complex": "bun run test-app/complex-sql-benchmarks.ts",
     "demo:sqlite": "bun run test-app/sqlite-comparison-demo.ts",
     "demo:quick": "bun run test-app/quick-comparison-demo.ts",
     "db:start": "bun run test-app/setup-test-dbs.ts start",
@@ -62,19 +67,19 @@
     "@prisma/client": "^6.0.0"
   },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.0.0"
+    "@types/bun": "^1.3.0",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@prisma/driver-adapter-utils": "^6.17.1",
+    "@prisma/driver-adapter-utils": "^6.0.0",
     "@types/pg": "^8.15.5",
     "pg": "^8.16.3"
   },
   "optionalDependencies": {
-    "@prisma/adapter-pg": "^6.17.1",
-    "@prisma/adapter-planetscale": "^6.17.1",
-    "mysql2": "^3.6.5",
-    "better-sqlite3": "^9.2.2"
+    "@prisma/adapter-pg": "^6.18.0",
+    "@prisma/adapter-planetscale": "^6.0.0",
+    "mysql2": "^3.15.3",
+    "better-sqlite3": "^12.4.1"
   },
   "engines": {
     "node": ">=18",

@@ -4,6 +4,14 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.0 - 2025-10-23
+-------------------
+
+- Postgres connection strings: heuristic guard now detects unencoded reserved characters in credentials and falls back to a manual rewrite path, so unusual `userinfo` values no longer break adapter bootstrapping.
+- Node compatibility: added explicit CommonJS `require` entries for the primary and optimized exports so consumers can `require("@abcx3/prisma-bun-adapter")` without bundler tricks.
+- Tooling & scripts: new complex Prisma and raw SQL benchmark runners (`bun run test:bench:prisma-complex`, `bun run test:bench:sql-complex`) plus an `debug:example` watch script; documentation expanded with usage guidance and benchmark sections.
+- Examples & tests: example apps now pull connection strings from env (with Docker Compose helper) and share the test database registry across integration tests, keeping the sample workflows aligned with the new scripts.
+
 1.0.3 - 2025-10-22
 -------------------
 

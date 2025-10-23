@@ -1,25 +1,26 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { BunPostgresAdapter, BunMySQLAdapter, BunSQLiteAdapter } from "../src/index.js";
+import { databases as testDatabases } from "../test-app/setup-test-dbs.ts";
+
+const pgConn = testDatabases.find((d) => d.name === "PostgreSQL")!.connectionString;
+const mysqlConn = testDatabases.find((d) => d.name === "MySQL")!.connectionString;
 
 describe("BunPostgresAdapter", () => {
   let adapter: BunPostgresAdapter;
   
   beforeAll(() => {
-    const connectionString = process.env.TEST_POSTGRES_URL || 
-      "postgresql://test:test@localhost:5432/test_db";
-    
-    adapter = new BunPostgresAdapter(connectionString);
+    adapter = new BunPostgresAdapter(pgConn);
   });
 
   it("should create adapter with connection string", () => {
-    const testAdapter = new BunPostgresAdapter("postgresql://test:test@localhost:5432/test");
+    const testAdapter = new BunPostgresAdapter(pgConn);
     expect(testAdapter.provider).toBe("postgres");
     expect(testAdapter.adapterName).toBe("bun-postgres-adapter");
   });
 
   it("should create adapter with config object", () => {
     const testAdapter = new BunPostgresAdapter({
-      connectionString: "postgresql://test:test@localhost:5432/test",
+      connectionString: pgConn,
       maxConnections: 5,
       idleTimeout: 10000,
     });
@@ -38,21 +39,18 @@ describe("BunMySQLAdapter", () => {
   let adapter: BunMySQLAdapter;
   
   beforeAll(() => {
-    const connectionString = process.env.TEST_MYSQL_URL || 
-      "mysql://test:test@localhost:3306/test_db";
-    
-    adapter = new BunMySQLAdapter(connectionString);
+    adapter = new BunMySQLAdapter(mysqlConn);
   });
 
   it("should create adapter with connection string", () => {
-    const testAdapter = new BunMySQLAdapter("mysql://test:test@localhost:3306/test");
+    const testAdapter = new BunMySQLAdapter(mysqlConn);
     expect(testAdapter.provider).toBe("mysql");
     expect(testAdapter.adapterName).toBe("bun-mysql-adapter");
   });
 
   it("should create adapter with config object", () => {
     const testAdapter = new BunMySQLAdapter({
-      connectionString: "mysql://test:test@localhost:3306/test",
+      connectionString: mysqlConn,
       maxConnections: 5,
       idleTimeout: 10000,
     });
@@ -103,12 +101,12 @@ describe("Adapter Comparison", () => {
   const adapters = [
     {
       name: "PostgreSQL",
-      adapter: new BunPostgresAdapter("postgresql://test:test@localhost:5432/test_db"),
+      adapter: new BunPostgresAdapter(pgConn),
       provider: "postgres" as const,
     },
     {
       name: "MySQL", 
-      adapter: new BunMySQLAdapter("mysql://test:test@localhost:3306/test_db"),
+      adapter: new BunMySQLAdapter(mysqlConn),
       provider: "mysql" as const,
     },
     {

@@ -7,7 +7,7 @@
 
 import { $ } from "bun";
 
-interface DatabaseConfig {
+export interface DatabaseConfig {
   name: string;
   containerName: string;
   image: string;
@@ -17,7 +17,7 @@ interface DatabaseConfig {
   envVarName: string;
 }
 
-const databases: DatabaseConfig[] = [
+export const databases: DatabaseConfig[] = [
   {
     name: "PostgreSQL",
     containerName: "test-postgres",

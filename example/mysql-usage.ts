@@ -5,11 +5,11 @@ import { BunMySQLAdapter } from "../src/index.js";
 
 async function main() {
   // Create adapter with connection string
-  const adapter = new BunMySQLAdapter("mysql://user:password@localhost:3306/mydb");
+  const adapter = new BunMySQLAdapter(process.env.EXAMPLE_MYSQL_URL!);
   
   // Or create with configuration object
   const adapterWithConfig = new BunMySQLAdapter({
-    connectionString: "mysql://user:password@localhost:3306/mydb",
+    connectionString: process.env.EXAMPLE_MYSQL_URL!,
     maxConnections: 10,
     idleTimeout: 30000,
     ssl: {
@@ -19,10 +19,11 @@ async function main() {
 
   // Create Prisma client with the adapter
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {
+    await prisma.$connect();
     // Example queries
     console.log("🔍 Testing MySQL adapter...");
     

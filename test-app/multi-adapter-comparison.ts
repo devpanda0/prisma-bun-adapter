@@ -1,4 +1,8 @@
 import { BunPostgresAdapter, BunMySQLAdapter, BunSQLiteAdapter } from "../src/index.js";
+import { databases as testDatabases } from "./setup-test-dbs.ts";
+
+const POSTGRES_URL = testDatabases.find((d) => d.name === "PostgreSQL")!.connectionString;
+const MYSQL_URL = testDatabases.find((d) => d.name === "MySQL")!.connectionString;
 
 interface TestResult {
   adapter: string;
@@ -34,7 +38,7 @@ const adapters: AdapterConfig[] = [
   {
     name: "PostgreSQL",
     adapter: BunPostgresAdapter,
-    connectionString: process.env.TEST_POSTGRES_URL || "postgresql://test:test@localhost:5433/test_db",
+    connectionString: POSTGRES_URL,
     testQueries: {
       simple: "SELECT 1 as test_value",
       parameterized: { sql: "SELECT $1 as param_value", args: ["test_param"] },
@@ -53,7 +57,7 @@ const adapters: AdapterConfig[] = [
   {
     name: "MySQL",
     adapter: BunMySQLAdapter,
-    connectionString: process.env.TEST_MYSQL_URL || "mysql://test:test@localhost:3306/test_db",
+    connectionString: MYSQL_URL,
     testQueries: {
       simple: "SELECT 1 as test_value",
       parameterized: { sql: "SELECT ? as param_value", args: ["test_param"] },

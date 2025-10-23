@@ -5,11 +5,11 @@ import { BunPostgresAdapter } from "../src/index.js";
 
 async function main() {
   // Create adapter with connection string
-  const adapter = new BunPostgresAdapter("postgresql://user:password@localhost:5432/mydb");
+  const adapter = new BunPostgresAdapter(process.env.EXAMPLE_POSTGRES_URL!);
   
   // Or create with configuration object
   const adapterWithConfig = new BunPostgresAdapter({
-    connectionString: "postgresql://user:password@localhost:5432/mydb",
+    connectionString: process.env.EXAMPLE_POSTGRES_URL!,
     maxConnections: 10,
     idleTimeout: 30000,
     ssl: {
@@ -19,10 +19,11 @@ async function main() {
 
   // Create Prisma client with the adapter
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {
+    await prisma.$connect();
     // Example queries
     console.log("🔍 Testing PostgreSQL adapter...");
     

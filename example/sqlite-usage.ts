@@ -5,14 +5,14 @@ import { BunSQLiteAdapter } from "../src/index.js";
 
 async function main() {
   // Create adapter with filename string
-  const adapter = new BunSQLiteAdapter("./mydb.sqlite");
+  const adapter = new BunSQLiteAdapter(process.env.EXAMPLE_SQLITE_FILE || "./mydb.sqlite");
   
   // Or use in-memory database
   const memoryAdapter = new BunSQLiteAdapter(":memory:");
   
   // Or create with configuration object
   const adapterWithConfig = new BunSQLiteAdapter({
-    filename: "./mydb.sqlite",
+    filename: process.env.EXAMPLE_SQLITE_FILE || "./mydb.sqlite",
     maxConnections: 1, // SQLite typically uses single connection
     readonly: false,
     create: true,
@@ -20,10 +20,11 @@ async function main() {
 
   // Create Prisma client with the adapter
   const prisma = new PrismaClient({
-    adapter: await adapter.connect(),
+    adapter,
   });
 
   try {
+    await prisma.$connect();
     // Example queries
     console.log("🔍 Testing SQLite adapter...");
     

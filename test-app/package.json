@@ -24,14 +24,14 @@
     "db:seed": "bun run seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.17.1",
-    "@prisma/adapter-pg": "^6.17.1",
-    "pg": "^8.11.3",
-    "prisma-bun-postgres-adapter": "file:../"
+    "@prisma/adapter-pg": "^6.18.0",
+    "@prisma/client": "^6.18.0",
+    "pg": "^8.16.3",
+    "prisma-bun-postgres-adapter": "file:.."
   },
   "devDependencies": {
-    "prisma": "^6.17.1",
     "@types/bun": "latest",
-    "@types/pg": "^8.10.9"
+    "@types/pg": "^8.15.5",
+    "prisma": "^6.18.0"
   }
 }

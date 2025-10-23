@@ -313,3 +313,38 @@ bun run test:comparison
 - **Performance analytics dashboard**
 
 This comprehensive performance testing suite ensures that Bun adapters consistently deliver superior performance while maintaining compatibility and reliability across all supported databases.
+### 5. Complex Prisma Benchmarks (`bun run test:bench:prisma-complex`)
+Deep, realistic Prisma workloads comparing `BunPostgresAdapter` vs `@prisma/adapter-pg`:
+
+- Deep nested includes with relation filters and counts
+- Aggregations via `groupBy`
+- Large `IN` lists (1k ids)
+- Raw SQL with CTEs and window functions via `$queryRaw`
+- Many-to-many join analysis (Post–Tag)
+- Concurrency case (10x relation reads)
+
+Outputs a summary showing where the Bun adapter shines, ties, or lags with percent differences.
+
+Prereq: a Postgres database; script auto-seeds using the existing `User`/`Post`/`Tag` models.
+
+Run:
+```bash
+bun run test:bench:prisma-complex
+```
+
+### 6. Complex SQL Benchmarks (`bun run test:bench:sql-complex`)
+Low-level SQL focus comparing Bun’s native Postgres client vs `pg`:
+
+- CTEs + window functions
+- Join + aggregation (tag counts)
+- Aggregation-heavy workloads (avg content length)
+- JSONB filter + aggregation
+- Large parameter lists (1000 placeholders)
+- Concurrency with 10 parallel window queries
+
+The script seeds dedicated `bench_*` tables and prints an analysis summary.
+
+Run:
+```bash
+bun run test:bench:sql-complex
+```

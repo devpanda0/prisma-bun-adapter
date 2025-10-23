@@ -1,4 +1,8 @@
 import { BunPostgresAdapter, BunMySQLAdapter, BunSQLiteAdapter } from "../src/index.js";
+import { databases as testDatabases } from "./setup-test-dbs.ts";
+
+const POSTGRES_URL = testDatabases.find((d) => d.name === "PostgreSQL")!.connectionString;
+const MYSQL_URL = testDatabases.find((d) => d.name === "MySQL")!.connectionString;
 
 interface BenchmarkResult {
   adapter: string;
@@ -31,7 +35,7 @@ async function createTraditionalAdapters(): Promise<AdapterConfig[]> {
       name: "Traditional PostgreSQL (pg)",
       type: "traditional",
       provider: "postgresql",
-      connectionString: process.env.TEST_POSTGRES_URL || "postgresql://test:test@localhost:5433/test_db",
+      connectionString: POSTGRES_URL,
       createAdapter: async function() {
         const pool = new Pool({ 
           connectionString: this.connectionString,
@@ -62,7 +66,7 @@ async function createTraditionalAdapters(): Promise<AdapterConfig[]> {
       name: "Traditional MySQL (mysql2)",
       type: "traditional", 
       provider: "mysql",
-      connectionString: process.env.TEST_MYSQL_URL || "mysql://test:test@localhost:3306/test_db",
+      connectionString: MYSQL_URL,
       createAdapter: async function() {
         const pool = mysql.createPool({
           uri: this.connectionString,
@@ -118,7 +122,7 @@ async function createBunAdapters(): Promise<AdapterConfig[]> {
       name: "Bun PostgreSQL",
       type: "bun",
       provider: "postgresql",
-      connectionString: process.env.TEST_POSTGRES_URL || "postgresql://test:test@localhost:5433/test_db",
+      connectionString: POSTGRES_URL,
       createAdapter: async function() {
         const adapter = new BunPostgresAdapter(this.connectionString!);
         const driverAdapter = await adapter.connect();
@@ -138,7 +142,7 @@ async function createBunAdapters(): Promise<AdapterConfig[]> {
       name: "Bun MySQL",
       type: "bun",
       provider: "mysql",
-      connectionString: process.env.TEST_MYSQL_URL || "mysql://test:test@localhost:3306/test_db",
+      connectionString: MYSQL_URL,
       createAdapter: async function() {
         const adapter = new BunMySQLAdapter(this.connectionString!);
         const driverAdapter = await adapter.connect();
