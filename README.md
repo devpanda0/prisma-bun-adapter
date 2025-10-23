@@ -45,6 +45,30 @@ await prisma.user.findMany();
 ```
 
 
+Optimized Build (Optional)
+--------------------------
+
+The package also ships an "optimized" bundle under `@abcx3/prisma-bun-adapter/optimized`. It enables a few extra runtime tweaks: connection pooling (default `maxConnections: 20`), eager warm-up of the Postgres socket, and more aggressive SQL template caching. Those features improve throughput for high-concurrency apps but add a bit of startup work and memory usage.
+
+You can opt in explicitly:
+
+```ts
+import { PrismaClient } from "@prisma/client";
+import { BunPostgresAdapter } from "@abcx3/prisma-bun-adapter/optimized";
+
+const adapter = new BunPostgresAdapter({
+  connectionString: process.env.DATABASE_URL!,
+  maxConnections: 20,
+});
+
+const prisma = new PrismaClient({ adapter });
+
+await prisma.user.findMany();
+```
+
+If you prefer to fall back automatically when the optimized bundle is unavailable (for example, in slim deployments where the extra bundle isn't shipped), wrap the `require` in a try/catch and fall back to the base entry point. The core API and configuration shape is identical between the two builds, so switching is a one-line change.
+
+
 
 Use Prisma Like Normal
 ----------------------

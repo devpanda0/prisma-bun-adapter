@@ -4,6 +4,11 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.1 - 2025-10-23
+-------------------
+
+- Documentation: explain the optional `@abcx3/prisma-bun-adapter/optimized` entry point, when to use it, and show sample code.
+
 1.1.0 - 2025-10-23
 -------------------
 
