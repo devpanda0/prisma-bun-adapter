@@ -4,6 +4,13 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.2 - 2025-10-23
+-------------------
+
+- Prisma comprehensive test suite now self-seeds baseline fixture data and adds a date-field `prisma.user.update` benchmark to cover reported regression scenarios.
+- Bun Postgres adapter transactions reserve dedicated connections and issue explicit `BEGIN`/`COMMIT`/`ROLLBACK`, ensuring interactive transactions roll back correctly and clean up resources.
+- Expanded regression coverage around transaction rollbacks and date updates to guard against future regressions.
+
 1.1.1 - 2025-10-23
 -------------------
 

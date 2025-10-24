@@ -11,7 +11,7 @@ docker run --name test-postgres \
   -e POSTGRES_USER=test \
   -e POSTGRES_PASSWORD=test \
   -e POSTGRES_DB=test_db \
-  -p 5432:5432 \
+  -p 5433:5432 \
   -d postgres:15
 
 # Set environment variable

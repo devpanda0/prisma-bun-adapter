@@ -22,12 +22,18 @@ interface BunSqlConnection {
   end(): Promise<void>;
   begin(): Promise<BunSqlTransaction>;
   transaction<T>(callback: (tx: BunSqlTransaction) => Promise<T>): Promise<T>;
+  reserve(): Promise<BunReservedSqlConnection>;
 }
 
 interface BunSqlTransaction {
   (strings: TemplateStringsArray, ...values: any[]): Promise<BunSqlResult>;
   commit(): Promise<void>;
   rollback(): Promise<void>;
+}
+
+interface BunReservedSqlConnection {
+  (strings: TemplateStringsArray, ...values: any[]): Promise<BunSqlResult>;
+  release?: () => Promise<void> | void;
 }
 
 // Configuration interfaces
@@ -263,8 +269,112 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
   }
 
   async startTransaction(isolationLevel?: IsolationLevel): Promise<Transaction> {
-    const connection = await this.getConnection();
-    
+    const connection = await this.createConnection();
+    let reserved: BunReservedSqlConnection;
+
+    try {
+      reserved = await connection.reserve();
+    } catch (err) {
+      try {
+        await connection.end();
+      } catch {
+        // ignore shutdown errors
+      }
+      throw err;
+    }
+    let finished = false;
+    let aborted = false;
+
+    const releaseReserved = async (): Promise<void> => {
+      try {
+        const maybeRelease = (reserved as any).release?.();
+        if (maybeRelease && typeof maybeRelease.then === "function") {
+          await maybeRelease;
+        }
+      } catch {
+        // ignore release errors
+      }
+    };
+
+    const closeConnection = async (): Promise<void> => {
+      try {
+        await connection.end();
+      } catch {
+        // ignore shutdown errors
+      }
+    };
+
+    const finalizeResources = async (): Promise<void> => {
+      await releaseReserved();
+      await closeConnection();
+    };
+
+    try {
+      const begin = this.createTemplateStrings(["BEGIN"]);
+      await reserved(begin);
+
+      if (isolationLevel && this.provider !== "sqlite") {
+        const iso = this.createTemplateStrings([
+          `SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`,
+        ]);
+        await reserved(iso);
+      }
+    } catch (err) {
+      await finalizeResources();
+      throw err;
+    }
+
+    const transaction = ((strings: TemplateStringsArray, ...values: any[]) =>
+      reserved(strings, ...values)) as BunSqlTransaction;
+
+    transaction.commit = async () => {
+      const commit = this.createTemplateStrings(["COMMIT"]);
+      await reserved(commit);
+    };
+
+    transaction.rollback = async () => {
+      const rollback = this.createTemplateStrings(["ROLLBACK"]);
+      await reserved(rollback);
+    };
+
+    const finalize = async (action: "commit" | "rollback") => {
+      if (finished) {
+        return;
+      }
+
+      try {
+        if (action === "commit") {
+          await transaction.commit();
+        } else {
+          try {
+            await transaction.rollback();
+          } catch {
+            // ignore rollback errors when already closed
+          }
+        }
+      } finally {
+        finished = true;
+        await finalizeResources();
+      }
+    };
+
+    const runQuery = async (sql: string, args: any[]): Promise<BunSqlResult> => {
+      if (finished) {
+        throw new Error("Transaction is already closed");
+      }
+
+      try {
+        return await this.executeTransactionQueryOptimized(
+          transaction,
+          sql,
+          args,
+        );
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
+    };
+
     return {
       provider: this.provider,
       adapterName: this.adapterName,
@@ -272,52 +382,60 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
         usePhantomQuery: false,
       },
       queryRaw: async (query: SqlQuery) => {
-        return await connection.transaction(async (tx) => {
-          if (isolationLevel && this.provider !== "sqlite") {
-            const strings = this.createTemplateStrings([`SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`]);
-            await tx(strings);
-          }
-          
-          const result = await this.executeTransactionQueryOptimized(tx, query.sql, query.args || []);
-          
-          if (!Array.isArray(result) || result.length === 0) {
-            return { columnNames: [], columnTypes: [], rows: [] };
+        const result = await runQuery(query.sql, query.args || []);
+
+        if (!Array.isArray(result) || result.length === 0) {
+          return { columnNames: [], columnTypes: [], rows: [] };
+        }
+
+        const firstRow = result[0];
+        const columnNames = Object.keys(firstRow);
+        const columnCount = columnNames.length;
+
+        const columnTypes = this.determineColumnTypes(result, columnNames);
+        const rows = new Array(result.length);
+
+        for (let rowIndex = 0; rowIndex < result.length; rowIndex++) {
+          const row = result[rowIndex];
+          const processedRow = new Array(columnCount);
+
+          for (let colIndex = 0; colIndex < columnCount; colIndex++) {
+            const val = row[columnNames[colIndex]];
+            processedRow[colIndex] =
+              columnTypes[colIndex] === ColumnTypeEnum.Json
+                ? this.ensureJsonString(val)
+                : this.serializeValueFast(val);
           }
 
-          const firstRow = result[0];
-          const columnNames = Object.keys(firstRow);
-          const columnCount = columnNames.length;
-          
-          const columnTypes = this.determineColumnTypes(result, columnNames);
-          const rows = new Array(result.length);
-          
-          for (let rowIndex = 0; rowIndex < result.length; rowIndex++) {
-            const row = result[rowIndex];
-            const processedRow = new Array(columnCount);
-            
-            for (let colIndex = 0; colIndex < columnCount; colIndex++) {
-              const val = row[columnNames[colIndex]];
-              if (columnTypes[colIndex] === ColumnTypeEnum.Json) {
-                processedRow[colIndex] = this.ensureJsonString(val);
-              } else {
-                processedRow[colIndex] = this.serializeValueFast(val);
-              }
-            }
-            
-            rows[rowIndex] = processedRow;
-          }
-          
-          return { columnNames, columnTypes, rows };
-        });
+          rows[rowIndex] = processedRow;
+        }
+
+        return { columnNames, columnTypes, rows };
       },
       executeRaw: async (query: SqlQuery) => {
-        return await connection.transaction(async (tx) => {
-          const result = await this.executeTransactionQueryOptimized(tx, query.sql, query.args || []);
-          return result.affectedRows || result.count || 0;
-        });
+        const result = await runQuery(query.sql, query.args || []);
+        return result.affectedRows || result.count || 0;
       },
-      commit: async () => {},
-      rollback: async () => {},
+      commit: async () => {
+        if (finished) {
+          return;
+        }
+
+        if (aborted) {
+          await finalize("rollback");
+          throw new Error("Transaction rolled back due to a previous error");
+        }
+
+        try {
+          await finalize("commit");
+        } catch (err) {
+          await finalize("rollback").catch(() => {});
+          throw err;
+        }
+      },
+      rollback: async () => {
+        await finalize("rollback");
+      },
     };
   }
 

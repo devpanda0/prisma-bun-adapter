@@ -10,6 +10,106 @@ interface TestResult {
 class AdapterTester {
   private results: TestResult[] = [];
 
+  private async ensureBaselineData(): Promise<void> {
+    // Clean up any leftover rollback test users from previous runs
+    await prisma.user.deleteMany({
+      where: { email: "rollback-test@example.com" }
+    });
+
+    const existingAlice = await prisma.user.findUnique({
+      where: { email: "alice@example.com" }
+    });
+
+    if (existingAlice) {
+      return;
+    }
+
+    // Seed minimal dataset required for tests
+    await prisma.tag.deleteMany();
+    await prisma.post.deleteMany();
+    await prisma.profile.deleteMany();
+    await prisma.user.deleteMany();
+
+    const [typescriptTag, bunTag, prismaTag, postgresTag, performanceTag] = await Promise.all([
+      prisma.tag.create({ data: { name: "typescript" } }),
+      prisma.tag.create({ data: { name: "bun" } }),
+      prisma.tag.create({ data: { name: "prisma" } }),
+      prisma.tag.create({ data: { name: "postgresql" } }),
+      prisma.tag.create({ data: { name: "performance" } })
+    ]);
+
+    const alice = await prisma.user.create({
+      data: {
+        email: "alice@example.com",
+        name: "Alice Johnson",
+        profile: {
+          create: {
+            bio: "Software engineer passionate about TypeScript and databases",
+            avatar: "https://example.com/alice.jpg"
+          }
+        }
+      }
+    });
+
+    const bob = await prisma.user.create({
+      data: {
+        email: "bob@example.com",
+        name: "Bob Smith",
+        profile: {
+          create: {
+            bio: "Full-stack developer and open source contributor",
+            avatar: "https://example.com/bob.jpg"
+          }
+        }
+      }
+    });
+
+    await prisma.post.create({
+      data: {
+        title: "Getting Started with Bun and Prisma",
+        content: "Bun is a fast JavaScript runtime that can significantly improve your development experience...",
+        published: true,
+        authorId: alice.id,
+        tags: {
+          connect: [
+            { id: bunTag.id },
+            { id: prismaTag.id },
+            { id: performanceTag.id }
+          ]
+        }
+      }
+    });
+
+    await prisma.post.create({
+      data: {
+        title: "TypeScript Best Practices in 2024",
+        content: "TypeScript continues to evolve with new features and improvements...",
+        published: true,
+        authorId: alice.id,
+        tags: {
+          connect: [
+            { id: typescriptTag.id }
+          ]
+        }
+      }
+    });
+
+    await prisma.post.create({
+      data: {
+        title: "PostgreSQL Performance Optimization",
+        content: "Learn how to optimize your PostgreSQL queries for better performance...",
+        published: false,
+        authorId: bob.id,
+        tags: {
+          connect: [
+            { id: postgresTag.id },
+            { id: performanceTag.id }
+          ]
+        }
+      }
+    });
+  }
+
   private async runTest(name: string, testFn: () => Promise<void>): Promise<void> {
     const start = performance.now();
     try {
@@ -65,12 +165,13 @@ class AdapterTester {
     console.log("\n🔄 Testing CRUD Operations");
     console.log("=" .repeat(40));
 
-    let testUserId: number;
+    let testUserId: number | null = null;
+    const testEmail = `crud-user-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
 
     await this.runTest("Create user", async () => {
       const user = await prisma.user.create({
         data: {
-          email: "test@example.com",
+          email: testEmail,
           name: "Test User"
         }
       });
@@ -78,13 +179,34 @@ class AdapterTester {
     });
 
     await this.runTest("Update user", async () => {
+      if (testUserId === null) {
+        throw new Error("Test user not created");
+      }
       await prisma.user.update({
         where: { id: testUserId },
         data: { name: "Updated Test User" }
       });
     });
 
+    await this.runTest("Update user date field", async () => {
+      if (testUserId === null) {
+        throw new Error("Test user not created");
+      }
+      const newCreatedAt = new Date("2000-01-01T00:00:00.000Z");
+      const updatedUser = await prisma.user.update({
+        where: { id: testUserId },
+        data: { createdAt: newCreatedAt }
+      });
+
+      if (updatedUser.createdAt.getTime() !== newCreatedAt.getTime()) {
+        throw new Error("Date field not updated correctly");
+      }
+    });
+
     await this.runTest("Create nested relations", async () => {
+      if (testUserId === null) {
+        throw new Error("Test user not created");
+      }
       await prisma.user.update({
         where: { id: testUserId },
         data: {
@@ -104,6 +226,9 @@ class AdapterTester {
     });
 
     await this.runTest("Delete user (cascade)", async () => {
+      if (testUserId === null) {
+        throw new Error("Test user not created");
+      }
       await prisma.user.delete({
         where: { id: testUserId }
       });
@@ -146,6 +271,10 @@ class AdapterTester {
   async testTransactions() {
     console.log("\n💳 Testing Transactions");
     console.log("=" .repeat(40));
+
+    await prisma.user.deleteMany({
+      where: { email: "rollback-test@example.com" }
+    });
 
     await this.runTest("Simple transaction", async () => {
       await prisma.$transaction(async (tx) => {
@@ -387,6 +516,8 @@ class AdapterTester {
   async runAllTests() {
     console.log("🧪 Comprehensive Prisma Bun PostgreSQL Adapter Test Suite");
     console.log("=" .repeat(60));
+
+    await this.ensureBaselineData();
 
     await this.testBasicQueries();
     await this.testCrudOperations();
