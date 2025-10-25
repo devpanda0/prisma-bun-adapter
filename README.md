@@ -13,7 +13,7 @@ Install
 Pick the adapter(s) you want. The package includes classes for all 3 drivers.
 
 ```
-bun add prisma-bun-adapter
+bun add @abcx3/prisma-bun-adapter
 ```
 
 Optional (for comparisons / tests in this repo):
@@ -29,7 +29,7 @@ PostgreSQL (Bun native):
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { BunPostgresAdapter } from "prisma-bun-adapter";
+import { BunPostgresAdapter } from "@abcx3/prisma-bun-adapter";
 
 const adapter = new BunPostgresAdapter({
   connectionString: process.env.DATABASE_URL!,
@@ -70,6 +70,43 @@ If you prefer to fall back automatically when the optimized bundle is unavailabl
 
 
 
+Import Matrix
+-------------
+
+Use these patterns depending on which build you want and your module system.
+
+- Base (default) build
+  - ESM:
+    - `import { BunPostgresAdapter, BunMySQLAdapter, BunSQLiteAdapter } from "@abcx3/prisma-bun-adapter"`
+  - CJS:
+    - `const { BunPostgresAdapter } = require("@abcx3/prisma-bun-adapter")`
+
+- Optimized Postgres build (subpath)
+  - ESM:
+    - `import { BunPostgresAdapter } from "@abcx3/prisma-bun-adapter/optimized"`
+    - `import BunPostgresAdapter from "@abcx3/prisma-bun-adapter/optimized"`
+    - `import { BunPostgres } from "@abcx3/prisma-bun-adapter/optimized"` (alias)
+  - Root re-exports (ESM):
+    - `import { OptimizedBunPostgresAdapter } from "@abcx3/prisma-bun-adapter"`
+    - `import { BunPostgresOptimized } from "@abcx3/prisma-bun-adapter"`
+    - Advanced (driver class): `import { OptimizedBunPostgresDriverAdapter } from "@abcx3/prisma-bun-adapter"`
+
+TypeScript module resolution tips (ESM subpaths)
+-----------------------------------------------
+
+When importing the optimized subpath, set these in your host project's `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  }
+}
+```
+
+`Node16` also works. This matches Node-style ESM/CJS resolution and avoids errors like “An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled.”
+
 Use Prisma Like Normal
 ----------------------
 
@@ -102,7 +139,7 @@ Service/DI usage (e.g., NestJS): create the client in an async factory and injec
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { BunPostgresAdapter } from "prisma-bun-adapter";
+import { BunPostgresAdapter } from "@abcx3/prisma-bun-adapter";
 
 export async function makePrisma() {
   const adapter = new BunPostgresAdapter(process.env.DATABASE_URL!);
@@ -119,18 +156,29 @@ Notes
 
 - You do not need to percent‑encode special characters in your DB password when using `DATABASE_URL`. The adapter normalizes and encodes credentials automatically so model queries like `prisma.user.findFirst` work regardless of password contents.
 - No query rewrites required: keep using `prisma.<model>.<method>` as usual.
+- TypeScript module resolution: if your host project uses TypeScript and you import the optimized subpath (or rely on ESM subpath exports), set `compilerOptions.module` and `compilerOptions.moduleResolution` to `"Node16"` or `"NodeNext"` in your `tsconfig.json`. This matches Node-style ESM/CJS resolution and avoids import path errors for `@abcx3/prisma-bun-adapter/optimized`.
 
 Troubleshooting
 ---------------
 
 - URI error on first model query (e.g., `user.findFirst`): This usually means your `DATABASE_URL` is malformed (e.g., missing scheme/host) or contains a stray character that breaks the URL. The adapter auto‑encodes credentials, but if parsing still fails, verify the URL shape is valid (e.g., `postgresql://user:pass@host:5432/db?sslmode=disable`).
 - Models not accessible: Ensure you ran `prisma generate` after updating your schema, and construct `PrismaClient` with the adapter factory, e.g. `new PrismaClient({ adapter: new BunPostgresAdapter(process.env.DATABASE_URL!) })`. Generated model delegates (e.g., `prisma.user.findFirst`) work normally with this adapter.
+- TypeScript import errors for optimized build: configure `tsconfig.json` with `module: "Node16" | "NodeNext"` and `moduleResolution: "Node16" | "NodeNext"`. Example:
+
+  ```json
+  {
+    "compilerOptions": {
+      "module": "NodeNext",
+      "moduleResolution": "NodeNext"
+    }
+  }
+  ```
 
 MySQL (Bun native):
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { BunMySQLAdapter } from "prisma-bun-adapter";
+import { BunMySQLAdapter } from "@abcx3/prisma-bun-adapter";
 
 const adapter = new BunMySQLAdapter(process.env.DATABASE_URL!);
 const prisma = new PrismaClient({ adapter });
@@ -140,7 +188,7 @@ SQLite (Bun native):
 
 ```ts
 import { PrismaClient } from "@prisma/client";
-import { BunSQLiteAdapter } from "prisma-bun-adapter";
+import { BunSQLiteAdapter } from "@abcx3/prisma-bun-adapter";
 
 const adapter = new BunSQLiteAdapter(":memory:");
 const prisma = new PrismaClient({ adapter });

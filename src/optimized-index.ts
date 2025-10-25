@@ -35,12 +35,18 @@ interface BunSqlConnection {
   end(): Promise<void>;
   begin(): Promise<BunSqlTransaction>;
   transaction<T>(callback: (tx: BunSqlTransaction) => Promise<T>): Promise<T>;
+  reserve(): Promise<BunReservedSqlConnection>;
 }
 
 interface BunSqlTransaction {
   (strings: TemplateStringsArray, ...values: any[]): Promise<BunSqlResult>;
   commit(): Promise<void>;
   rollback(): Promise<void>;
+}
+
+interface BunReservedSqlConnection {
+  (strings: TemplateStringsArray, ...values: any[]): Promise<BunSqlResult>;
+  release?: () => Promise<void> | void;
 }
 
 // Cache for template strings to avoid repeated parsing
@@ -55,14 +61,14 @@ const DATETIME_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
+export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
   readonly provider = "postgres" as const;
   readonly adapterName = "bun-postgres-adapter-optimized";
   private connectionString: string;
   private connections: BunSqlConnection[] = [];
   private availableConnections: BunSqlConnection[] = [];
+  private waitQueue: Array<{ resolve: (conn: BunSqlConnection) => void; reject: (err: Error) => void }> = [];
   private maxConnections: number;
-  private connectionPromises = new Map<number, Promise<BunSqlConnection>>();
 
   constructor(connectionString: string, maxConnections: number = 20) {
     this.connectionString = connectionString;
@@ -83,20 +89,17 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     }
 
     // Wait for a connection to become available
-    return new Promise((resolve) => {
-      const checkForConnection = () => {
-        if (this.availableConnections.length > 0) {
-          resolve(this.availableConnections.pop()!);
-        } else {
-          // Use setImmediate for better performance than setTimeout
-          setImmediate(checkForConnection);
-        }
-      };
-      checkForConnection();
+    return new Promise((resolve, reject) => {
+      this.waitQueue.push({ resolve, reject });
     });
   }
 
   private releaseConnection(connection: BunSqlConnection): void {
+    if (this.waitQueue.length > 0) {
+      const waiter = this.waitQueue.shift();
+      waiter?.resolve(connection);
+      return;
+    }
     this.availableConnections.push(connection);
   }
 
@@ -242,6 +245,12 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     await Promise.all(this.connections.map((conn) => conn.end()));
     this.connections = [];
     this.availableConnections = [];
+    if (this.waitQueue.length > 0) {
+      const error = new Error("Adapter disposed");
+      while (this.waitQueue.length) {
+        this.waitQueue.shift()?.reject(error);
+      }
+    }
     templateCache.clear();
   }
 
@@ -249,15 +258,12 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     const connection = await this.getConnection();
     try {
       const statements = script.split(";").filter((stmt) => stmt.trim());
-      // Execute statements in parallel where safe
-      await Promise.all(
-        statements.map(async (statement) => {
-          if (statement.trim()) {
-            const strings = this.createTemplateStrings([statement.trim()]);
-            await connection(strings);
-          }
-        })
-      );
+      for (const statement of statements) {
+        if (statement.trim()) {
+          const strings = this.createTemplateStrings([statement.trim()]);
+          await connection(strings);
+        }
+      }
     } finally {
       this.releaseConnection(connection);
     }
@@ -336,46 +342,11 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       return connection(strings);
     }
 
-    // Check cache first
-    const cacheKey = sql;
-    let cached = templateCache.get(cacheKey);
-
-    if ((!cached || cached.paramCount !== args.length) && (sql.includes("$1"))) {
-      // Parse and cache the template
-      let templateSql = sql;
-      const paramCount = args.length;
-
-      // More efficient parameter replacement
-      if (sql.includes("$1")) {
-        for (let n = paramCount; n >= 1; n--) {
-          const idx = n - 1;
-          const marker = '${' + idx + '}';
-          templateSql = templateSql.replaceAll(`$${n}`, marker);
-        }
-      }
-
-      const parts = templateSql.split(/\$\{\d+\}/);
-      const strings = this.createTemplateStrings(parts);
-      const argOrder: number[] = [];
-      const re = /\$\{(\d+)\}/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(templateSql)) !== null) {
-        argOrder.push(Number(m[1]));
-      }
-
-      const built = { strings, paramCount, argOrder };
-      templateCache.set(cacheKey, built);
-      cached = built as any;
-    }
-
-    if (cached) {
-      const expanded = (cached as any).argOrder?.length ? (cached as any).argOrder.map((i: number) => args[i]) : args;
-      return connection(cached.strings, ...expanded);
-    }
-
-    // Fallback for non-parameterized queries
-    const strings = this.createTemplateStrings([sql]);
-    return connection(strings);
+    const cached = this.getOrCreateTemplate(sql, args.length)!;
+    const expanded = cached.argOrder?.length
+      ? cached.argOrder.map((i) => args[i])
+      : args;
+    return connection(cached.strings, ...expanded);
   }
 
   private createTemplateStrings(parts: string[]): TemplateStringsArray {
@@ -386,76 +357,334 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     return Object.assign(parts, { raw: parts }) as TemplateStringsArray;
   }
 
+  private getOrCreateTemplate(sql: string, argCount: number) {
+    if (argCount === 0) {
+      return null;
+    }
+
+    const cacheKey = sql;
+    let cached = templateCache.get(cacheKey);
+
+    if (!cached || cached.paramCount !== argCount) {
+      const built = this.buildTemplate(sql, argCount);
+      if (!built) {
+        throw new Error(
+          "Query arguments were provided but no SQL placeholders were found outside of literals/comments."
+        );
+      }
+      templateCache.set(cacheKey, built);
+      cached = built;
+    }
+
+    return cached;
+  }
+
+  private buildTemplate(sql: string, argCount: number) {
+    const templateSql = this.replacePlaceholders(sql, argCount);
+    if (!templateSql) {
+      return null;
+    }
+
+    const parts = templateSql.split(/\$\{\d+\}/);
+    const strings = this.createTemplateStrings(parts);
+    const argOrder: number[] = [];
+    const re = /\$\{(\d+)\}/g;
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(templateSql)) !== null) {
+      argOrder.push(Number(match[1]));
+    }
+    return { strings, paramCount: argCount, argOrder };
+  }
+
+  private replacePlaceholders(sql: string, argCount: number): string | null {
+    if (argCount === 0) {
+      return sql;
+    }
+
+    if (/\$\d+/.test(sql)) {
+      return this.replaceDollarPlaceholders(sql, argCount);
+    }
+
+    if (sql.includes("?")) {
+      return this.replaceQuestionPlaceholders(sql, argCount);
+    }
+
+    return null;
+  }
+
+  private replaceDollarPlaceholders(sql: string, argCount: number): string {
+    let templateSql = sql;
+    for (let n = argCount; n >= 1; n--) {
+      const idx = n - 1;
+      const marker = '${' + idx + '}';
+      templateSql = templateSql.replaceAll(`$${n}`, marker);
+    }
+    return templateSql;
+  }
+
+  private replaceQuestionPlaceholders(sql: string, argCount: number): string | null {
+    let result = "";
+    let lastIndex = 0;
+    let replaced = 0;
+    let i = 0;
+    let inSingle = false;
+    let inDouble = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    let dollarTag: string | null = null;
+
+    while (i < sql.length) {
+      const char = sql[i];
+      const next = sql[i + 1];
+
+      if (inLineComment) {
+        if (char === "\n") {
+          inLineComment = false;
+        }
+        i++;
+        continue;
+      }
+
+      if (inBlockComment) {
+        if (char === "*" && next === "/") {
+          inBlockComment = false;
+          i += 2;
+          continue;
+        }
+        i++;
+        continue;
+      }
+
+      if (dollarTag) {
+        if (sql.startsWith(dollarTag, i)) {
+          i += dollarTag.length;
+          dollarTag = null;
+          continue;
+        }
+        i++;
+        continue;
+      }
+
+      if (inSingle) {
+        if (char === "'" && next === "'") {
+          i += 2;
+          continue;
+        }
+        if (char === "'") {
+          inSingle = false;
+        }
+        i++;
+        continue;
+      }
+
+      if (inDouble) {
+        if (char === '"' && next === '"') {
+          i += 2;
+          continue;
+        }
+        if (char === '"') {
+          inDouble = false;
+        }
+        i++;
+        continue;
+      }
+
+      if (char === "'" && !inDouble) {
+        inSingle = true;
+        i++;
+        continue;
+      }
+
+      if (char === '"' && !inSingle) {
+        inDouble = true;
+        i++;
+        continue;
+      }
+
+      if (char === "-" && next === "-") {
+        inLineComment = true;
+        i += 2;
+        continue;
+      }
+
+      if (char === "/" && next === "*") {
+        inBlockComment = true;
+        i += 2;
+        continue;
+      }
+
+      if (char === "$") {
+        const match = sql.slice(i).match(/^\$[A-Za-z0-9_]*\$/);
+        if (match) {
+          dollarTag = match[0];
+          i += match[0].length;
+          continue;
+        }
+      }
+
+      if (char === "?" && replaced < argCount) {
+        result += sql.slice(lastIndex, i) + "${" + replaced + "}";
+        replaced++;
+        i++;
+        lastIndex = i;
+        continue;
+      }
+
+      i++;
+    }
+
+    result += sql.slice(lastIndex);
+    if (replaced !== argCount) {
+      return null;
+    }
+    return result;
+  }
+
   async startTransaction(
     isolationLevel?: IsolationLevel
   ): Promise<Transaction> {
     const connection = await this.getConnection();
+    let reserved: BunReservedSqlConnection;
+
+    try {
+      reserved = await connection.reserve();
+    } catch (err) {
+      this.releaseConnection(connection);
+      throw err;
+    }
+
+    const txRunner = ((strings: TemplateStringsArray, ...values: any[]) =>
+      reserved(strings, ...values)) as BunSqlTransaction;
+
+    txRunner.commit = async () => {
+      const commit = this.createTemplateStrings(["COMMIT"]);
+      await reserved(commit);
+    };
+
+    txRunner.rollback = async () => {
+      const rollback = this.createTemplateStrings(["ROLLBACK"]);
+      await reserved(rollback);
+    };
+
+    let finished = false;
+    let aborted = false;
+
+    const releaseReserved = async () => {
+      try {
+        const maybeRelease = reserved.release?.();
+        if (maybeRelease && typeof (maybeRelease as any).then === "function") {
+          await maybeRelease;
+        }
+      } catch {
+        // ignore release errors
+      }
+    };
+
+    const finalize = async (action: "commit" | "rollback") => {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      try {
+        if (action === "commit") {
+          await txRunner.commit();
+        } else {
+          try {
+            await txRunner.rollback();
+          } catch {
+            // swallow rollback errors for already-closed transactions
+          }
+        }
+      } finally {
+        await releaseReserved();
+        this.releaseConnection(connection);
+      }
+    };
+
+    try {
+      const begin = this.createTemplateStrings(["BEGIN"]);
+      await reserved(begin);
+
+      if (isolationLevel) {
+        const iso = this.createTemplateStrings([
+          `SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`,
+        ]);
+        await reserved(iso);
+      }
+    } catch (err) {
+      await releaseReserved();
+      this.releaseConnection(connection);
+      throw err;
+    }
+
+    const runQuery = async (sql: string, args: any[]): Promise<BunSqlResult> => {
+      if (finished) {
+        throw new Error("Transaction is already closed");
+      }
+
+      try {
+        return await this.executeTransactionQueryOptimized(
+          txRunner,
+          sql,
+          args,
+        );
+      } catch (err) {
+        aborted = true;
+        throw err;
+      }
+    };
 
     return {
-      provider: "postgres" as const,
-      adapterName: "bun-postgres-adapter-optimized",
+      provider: this.provider,
+      adapterName: this.adapterName,
       options: {
         usePhantomQuery: false,
       },
       queryRaw: async (query: SqlQuery) => {
-        return await connection.transaction(async (tx) => {
-          if (isolationLevel) {
-            const strings = this.createTemplateStrings([
-              `SET TRANSACTION ISOLATION LEVEL ${isolationLevel}`,
-            ]);
-            await tx(strings);
+        const result = await runQuery(query.sql, query.args || []);
+
+        if (!Array.isArray(result) || result.length === 0) {
+          return { columnNames: [], columnTypes: [], rows: [] };
+        }
+
+        const firstRow = result[0];
+        const columnNames = Object.keys(firstRow);
+        const columnCount = columnNames.length;
+
+        const columnTypes = this.determineColumnTypes(result, columnNames);
+        const rows = new Array(result.length);
+
+        for (let rowIndex = 0; rowIndex < result.length; rowIndex++) {
+          const row = result[rowIndex];
+          const processedRow = new Array(columnCount);
+
+          for (let colIndex = 0; colIndex < columnCount; colIndex++) {
+            const val = row[columnNames[colIndex]];
+            processedRow[colIndex] =
+              columnTypes[colIndex] === ColumnTypeEnum.Json
+                ? this.ensureJsonString(val)
+                : this.serializeValueFast(val);
           }
 
-          const result = await this.executeTransactionQueryOptimized(
-            tx,
-            query.sql,
-            query.args || []
-          );
+          rows[rowIndex] = processedRow;
+        }
 
-          if (!Array.isArray(result) || result.length === 0) {
-            return { columnNames: [], columnTypes: [], rows: [] };
-          }
-
-          const firstRow = result[0];
-          const columnNames = Object.keys(firstRow);
-          const columnCount = columnNames.length;
-
-          const columnTypes = this.determineColumnTypes(result, columnNames);
-          const rows = new Array(result.length);
-
-          for (let rowIndex = 0; rowIndex < result.length; rowIndex++) {
-            const row = result[rowIndex];
-            const processedRow = new Array(columnCount);
-
-            for (let colIndex = 0; colIndex < columnCount; colIndex++) {
-              const val = row[columnNames[colIndex]];
-              processedRow[colIndex] =
-                columnTypes[colIndex] === ColumnTypeEnum.Json
-                  ? this.ensureJsonString(val)
-                  : this.serializeValueFast(val);
-            }
-
-            rows[rowIndex] = processedRow;
-          }
-
-          return { columnNames, columnTypes, rows };
-        });
+        return { columnNames, columnTypes, rows };
       },
       executeRaw: async (query: SqlQuery) => {
-        return await connection.transaction(async (tx) => {
-          const result = await this.executeTransactionQueryOptimized(
-            tx,
-            query.sql,
-            query.args || []
-          );
-          return result.affectedRows || result.count || 0;
-        });
+        const result = await runQuery(query.sql, query.args || []);
+        return result.affectedRows || result.count || 0;
       },
       commit: async () => {
-        this.releaseConnection(connection);
+        if (aborted) {
+          await finalize("rollback");
+          throw new Error("Transaction rolled back due to a previous error");
+        }
+        await finalize("commit");
       },
       rollback: async () => {
-        this.releaseConnection(connection);
+        await finalize("rollback");
       },
     };
   }
@@ -470,28 +699,11 @@ class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       return tx(strings);
     }
 
-    if (sql.includes("$1")) {
-      let templateSql = sql;
-      for (let n = args.length; n >= 1; n--) {
-        const idx = n - 1;
-        const marker = '${' + idx + '}';
-        templateSql = templateSql.replaceAll(`$${n}`, marker);
-      }
-
-      const parts = templateSql.split(/\$\{\d+\}/);
-      const strings = this.createTemplateStrings(parts);
-      const argOrder: number[] = [];
-      const re = /\$\{(\d+)\}/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(templateSql)) !== null) {
-        argOrder.push(Number(m[1]));
-      }
-      const expanded = argOrder.length ? argOrder.map((i) => args[i]) : args;
-      return tx(strings, ...expanded);
-    }
-
-    const strings = this.createTemplateStrings([sql]);
-    return tx(strings);
+    const cached = this.getOrCreateTemplate(sql, args.length)!;
+    const expanded = cached.argOrder?.length
+      ? cached.argOrder.map((i) => args[i])
+      : args;
+    return tx(cached.strings, ...expanded);
   }
 
   private inferColumnTypeFast(value: unknown): ColumnType {
@@ -654,3 +866,5 @@ export class BunPostgresAdapter {
 }
 
 export default BunPostgresAdapter;
+// Convenience alias to match common naming expectations
+export { BunPostgresAdapter as BunPostgres };

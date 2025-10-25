@@ -881,3 +881,10 @@ export class BunSQLiteAdapter {
 
 // Default export for backward compatibility
 export default BunPostgresAdapter;
+// Re-export optimized Postgres for convenience so consumers can opt-in
+// without changing import path structure if they prefer a named export.
+export {
+  BunPostgresAdapter as OptimizedBunPostgresAdapter,
+  BunPostgresAdapter as BunPostgresOptimized,
+  OptimizedBunPostgresDriverAdapter,
+} from './optimized-index.js';
