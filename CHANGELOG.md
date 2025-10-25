@@ -4,6 +4,11 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.3 - 2025-10-25
+-------------------
+
+Update README and source files to reflect package name change to @abcx3/prisma-bun-adapter, add optimized import patterns, and enhance TypeScript module resolution guidance. Introduce re-exports for optimized Postgres adapter and improve transaction handling in the optimized driver implementation.
+
 1.1.2 - 2025-10-23
 -------------------
 
