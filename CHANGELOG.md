@@ -4,6 +4,11 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.4 - 2025-10-26
+-------------------
+
+Fix: Postgres array parameters for primitive JS arrays are now coerced into valid Postgres array literals when bound through Bun’s SQL template. This resolves “malformed array literal: "ALL"” errors for columns like `text[]` (e.g., `permissions: ["ALL"]`). The coercion applies only to arrays of strings, numbers, booleans, or null; complex/object arrays are left untouched to avoid impacting JSON payloads.
+
 1.1.3 - 2025-10-25
 -------------------
 

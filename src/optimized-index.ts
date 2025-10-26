@@ -346,7 +346,8 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     const expanded = cached.argOrder?.length
       ? cached.argOrder.map((i) => args[i])
       : args;
-    return connection(cached.strings, ...expanded);
+    const coerced = this.coerceArgsForPostgres(expanded);
+    return connection(cached.strings, ...coerced);
   }
 
   private createTemplateStrings(parts: string[]): TemplateStringsArray {
@@ -355,6 +356,43 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       parts = [...parts, ""];
     }
     return Object.assign(parts, { raw: parts }) as TemplateStringsArray;
+  }
+  
+  // Convert primitive JS arrays to a Postgres array literal string.
+  // This helps when binding values into array-typed columns (e.g., text[]),
+  // preventing errors like: malformed array literal: "...".
+  // We keep object/complex arrays untouched to avoid interfering with JSON.
+  private coerceArgsForPostgres(args: any[]): any[] {
+    const toPgArrayLiteral = (arr: any[]): string => {
+      const encodeItem = (v: any): string => {
+        if (v === null || v === undefined) return 'NULL';
+        switch (typeof v) {
+          case 'number':
+            return Number.isFinite(v) ? String(v) : 'NULL';
+          case 'boolean':
+            return v ? 'true' : 'false';
+          case 'string': {
+            const s = v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            return `"${s}"`;
+          }
+          default: {
+            try {
+              const s = JSON.stringify(v);
+              const e = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              return `"${e}"`;
+            } catch {
+              return 'NULL';
+            }
+          }
+        }
+      };
+      return `{${arr.map(encodeItem).join(',')}}`;
+    };
+
+    const isPrimitiveArray = (a: any[]): boolean =>
+      Array.isArray(a) && a.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
+
+    return args.map((v) => (Array.isArray(v) && isPrimitiveArray(v) ? toPgArrayLiteral(v) : v));
   }
 
   private getOrCreateTemplate(sql: string, argCount: number) {
@@ -703,7 +741,8 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     const expanded = cached.argOrder?.length
       ? cached.argOrder.map((i) => args[i])
       : args;
-    return tx(cached.strings, ...expanded);
+    const coerced = this.coerceArgsForPostgres(expanded);
+    return tx(cached.strings, ...coerced);
   }
 
   private inferColumnTypeFast(value: unknown): ColumnType {

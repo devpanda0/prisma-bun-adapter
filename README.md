@@ -48,6 +48,8 @@ await prisma.user.findMany();
 Optimized Build (Optional)
 --------------------------
 
+*please note, the optimized package only works with PostgreSQL. MySQL support might be added in the future.*
+
 The package also ships an "optimized" bundle under `@abcx3/prisma-bun-adapter/optimized`. It enables a few extra runtime tweaks: connection pooling (default `maxConnections: 20`), eager warm-up of the Postgres socket, and more aggressive SQL template caching. Those features improve throughput for high-concurrency apps but add a bit of startup work and memory usage.
 
 You can opt in explicitly:

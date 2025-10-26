@@ -190,7 +190,8 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
     
     if (cached) {
       const expanded = cached.argOrder?.length ? cached.argOrder.map((i) => args[i]) : args;
-      return connection(cached.strings, ...expanded);
+      const finalArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(expanded) : expanded;
+      return connection(cached.strings, ...finalArgs);
     }
     
     const strings = this.createTemplateStrings([sql]);
@@ -205,6 +206,41 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
       parts = [...parts, ''];
     }
     return Object.assign(parts, { raw: parts }) as TemplateStringsArray;
+  }
+
+  // Convert primitive JS arrays to a Postgres array literal string for array-typed columns.
+  // Leaves complex/object arrays untouched to avoid interfering with JSON payloads.
+  protected coerceArgsForPostgres(args: any[]): any[] {
+    const toPgArrayLiteral = (arr: any[]): string => {
+      const encodeItem = (v: any): string => {
+        if (v === null || v === undefined) return 'NULL';
+        switch (typeof v) {
+          case 'number':
+            return Number.isFinite(v) ? String(v) : 'NULL';
+          case 'boolean':
+            return v ? 'true' : 'false';
+          case 'string': {
+            const s = v.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            return `"${s}"`;
+          }
+          default: {
+            try {
+              const s = JSON.stringify(v);
+              const e = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              return `"${e}"`;
+            } catch {
+              return 'NULL';
+            }
+          }
+        }
+      };
+      return `{${arr.map(encodeItem).join(',')}}`;
+    };
+
+    const isPrimitiveArray = (a: any[]): boolean =>
+      Array.isArray(a) && a.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
+
+    return args.map((v) => (Array.isArray(v) && isPrimitiveArray(v) ? toPgArrayLiteral(v) : v));
   }
 
   // Normalize and encode credentials in connection string to avoid URI errors
@@ -509,7 +545,8 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
         argOrder.push(Number(m[1]));
       }
       const expanded = argOrder.length ? argOrder.map((i) => args[i]) : args;
-      return tx(strings, ...expanded);
+      const finalArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(expanded) : expanded;
+      return tx(strings, ...finalArgs);
     }
     
     const strings = this.createTemplateStrings([sql]);
