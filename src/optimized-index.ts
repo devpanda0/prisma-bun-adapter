@@ -832,6 +832,13 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       return value;
     }
 
+    // CRITICAL: If value is an array, return it as-is
+    // Prisma expects arrays for array-typed columns (text[], int[], etc.)
+    // Converting to JSON string breaks Prisma's .map() calls
+    if (Array.isArray(value)) {
+      return value;
+    }
+
     // Ensure JSON columns arrive as valid JSON strings
     try {
       return JSON.stringify(value);
@@ -851,8 +858,10 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
         if (v === null || v === undefined) continue;
         const t = typeof v;
         if (t === 'object') {
-          if (v instanceof Date || Buffer.isBuffer(v)) {
-            // not JSON
+          // Arrays from Postgres array columns (text[], int[], etc.) should NOT be treated as JSON
+          // They should be returned as-is to Prisma
+          if (v instanceof Date || Buffer.isBuffer(v) || Array.isArray(v)) {
+            // not JSON - these are native types
           } else {
             isJson = true; break;
           }

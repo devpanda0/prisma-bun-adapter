@@ -490,8 +490,10 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
         if (v === null || v === undefined) continue;
         const t = typeof v;
         if (t === 'object') {
-          if (v instanceof Date || Buffer.isBuffer(v)) {
-            // not JSON
+          // Arrays from Postgres array columns (text[], int[], etc.) should NOT be treated as JSON
+          // They should be returned as-is to Prisma
+          if (v instanceof Date || Buffer.isBuffer(v) || Array.isArray(v)) {
+            // not JSON - these are native types
           } else {
             isJson = true; break;
           }
@@ -602,25 +604,32 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
     if (value === null || value === undefined) {
       return value;
     }
-    
+
     const valueType = typeof value;
-    
+
     if (valueType === "string" || valueType === "number" || valueType === "boolean") {
       return value;
     }
-    
+
     if (valueType === "bigint") {
       return value.toString();
     }
-    
+
     if (value instanceof Date) {
       return value.toISOString();
     }
-    
+
     if (Buffer.isBuffer(value)) {
       return value;
     }
-    
+
+    // CRITICAL: If value is an array, return it as-is
+    // Prisma expects arrays for array-typed columns (text[], int[], etc.)
+    // Converting to JSON string breaks Prisma's .map() calls
+    if (Array.isArray(value)) {
+      return value;
+    }
+
     // For JSON/object-like values, return a valid JSON string to satisfy
     // Prisma driver-adapter-utils which parses JSON columns from strings
     try {

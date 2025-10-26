@@ -7,14 +7,31 @@ This project adheres to Semantic Versioning.
 1.1.5 - 2025-10-26
 -------------------
 
-**Critical Fix:** Array parameter coercion (`coerceArgsForPostgres`) is now applied in ALL code paths, including fallback paths where no SQL placeholders are detected. This resolves the "e.map is not a function" error that occurred when Prisma sent queries with array parameters but without explicit placeholders.
+**Critical Fix:** Complete array handling for Postgres array-typed columns (text[], int[], etc.)
 
-Changes:
+**Root Cause:**
+The adapter had TWO separate issues with array handling:
+1. **Write path:** Array coercion was not applied in fallback paths (fixed in previous commit)
+2. **Read path (NEW FIX):** Arrays returned from Postgres were incorrectly converted to JSON strings, causing "e.map is not a function" errors in Prisma's runtime
+
+**Changes:**
+
+Write Path (sending arrays TO Postgres):
 - Standard adapter: Added array coercion to fallback path in `executeQueryOptimized` and `executeTransactionQueryOptimized`
-- Optimized adapter: Changed `getOrCreateTemplate` to return null instead of throwing when no placeholders are found, allowing fallback with array coercion
-- Both adapters now consistently apply `coerceArgsForPostgres` to all queries with array parameters, regardless of placeholder detection
+- Optimized adapter: Changed `getOrCreateTemplate` to return null instead of throwing when no placeholders are found
+- Both adapters now consistently apply `coerceArgsForPostgres` to all queries with array parameters
 
-This fix ensures that array-typed columns (e.g., `text[]`, `int[]`) work correctly in all scenarios, including Prisma-generated queries that may embed parameters differently.
+Read Path (receiving arrays FROM Postgres) - NEW:
+- `serializeValueFast`: Arrays are now returned as-is instead of being JSON.stringify'd
+- `determineColumnTypes`: Arrays are no longer misidentified as JSON columns
+- This ensures Prisma receives actual JavaScript arrays for array-typed columns
+
+**Impact:**
+Array-typed columns (text[], int[], etc.) now work correctly in BOTH directions:
+- Writing: `permissions: ["ALL"]` → Postgres array literal `{"ALL"}`
+- Reading: Postgres array `{"ALL"}` → JavaScript array `["ALL"]` (not string `'["ALL"]'`)
+
+This fully resolves the "TypeError: e.map is not a function" error.
 
 1.1.4 - 2025-10-26
 -------------------
