@@ -289,6 +289,20 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
       const columnCount = columnNames.length;
       const rowCount = result.length;
 
+      // DEBUG: Log array columns
+      const hasArrays = result.some(row =>
+        columnNames.some(col => Array.isArray(row[col]))
+      );
+      if (hasArrays) {
+        console.log("[BunPostgresAdapter] Query with array columns:", query.sql.substring(0, 100));
+        columnNames.forEach((col, idx) => {
+          const val = firstRow[col];
+          if (Array.isArray(val)) {
+            console.log(`  Column ${col}: Array with ${val.length} items:`, val);
+          }
+        });
+      }
+
       // Determine column types using a scan to better detect JSON columns
       const columnTypes = this.determineColumnTypes(result, columnNames);
       const rows = new Array(rowCount);
@@ -300,13 +314,25 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
 
         for (let colIndex = 0; colIndex < columnCount; colIndex++) {
           const val = row[columnNames[colIndex]];
-          processedRow[colIndex] =
-            columnTypes[colIndex] === ColumnTypeEnum.Json
+          const serialized = columnTypes[colIndex] === ColumnTypeEnum.Json
               ? this.ensureJsonString(val)
               : this.serializeValueFast(val);
+
+          // DEBUG: Log array serialization
+          if (Array.isArray(val)) {
+            console.log(`  Serializing array column ${columnNames[colIndex]}:`, val, "->", serialized, "isArray?", Array.isArray(serialized));
+          }
+
+          processedRow[colIndex] = serialized;
         }
 
         rows[rowIndex] = processedRow;
+      }
+
+      // DEBUG: Log final result structure
+      if (hasArrays) {
+        console.log("[BunPostgresAdapter] Returning result with", rowCount, "rows");
+        console.log("  First row:", rows[0]);
       }
 
       return { columnNames, columnTypes, rows };
