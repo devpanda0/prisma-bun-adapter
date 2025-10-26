@@ -878,26 +878,34 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
     const types = new Array(columnCount) as ColumnType[];
     for (let i = 0; i < columnCount; i++) {
       const name = columnNames[i];
-      let isJson = false;
+
+      // Check if column contains arrays (must check ALL rows, not just first)
+      let hasArray = false;
+      let hasOtherObjects = false;
+
       for (let r = 0; r < result.length; r++) {
         const v = result[r][name];
         if (v === null || v === undefined) continue;
-        const t = typeof v;
-        if (t === 'object') {
-          // Arrays from Postgres array columns (text[], int[], etc.) should NOT be treated as JSON
-          // They should be returned as-is to Prisma
-          if (v instanceof Date || Buffer.isBuffer(v) || Array.isArray(v)) {
-            // not JSON - these are native types
-          } else {
-            isJson = true; break;
-          }
-        } else if (t === 'string') {
-          const s = (v as string).trim();
-          if (this.isJsonishString(s)) { isJson = true; break; }
+
+        if (Array.isArray(v)) {
+          hasArray = true;
+          break; // Found an array, stop checking
+        } else if (typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v)) {
+          hasOtherObjects = true;
         }
       }
-      if (isJson) types[i] = ColumnTypeEnum.Json;
-      else types[i] = this.inferColumnTypeFast(result[0]?.[name]);
+
+      // If ANY row has an array in this column, it's an array column (NOT JSON)
+      if (hasArray) {
+        // Return a generic type for arrays - let Prisma handle the specifics
+        types[i] = ColumnTypeEnum.UnknownNumber; // Prisma will infer from schema
+      } else if (hasOtherObjects) {
+        // Only non-array objects are JSON
+        types[i] = ColumnTypeEnum.Json;
+      } else {
+        // Fallback to type inference
+        types[i] = this.inferColumnTypeFast(result[0]?.[name]);
+      }
     }
     return types;
   }
