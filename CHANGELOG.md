@@ -9,29 +9,52 @@ This project adheres to Semantic Versioning.
 
 **Critical Fix:** Complete array handling for Postgres array-typed columns (text[], int[], etc.)
 
-**Root Cause:**
-The adapter had TWO separate issues with array handling:
-1. **Write path:** Array coercion was not applied in fallback paths (fixed in previous commit)
-2. **Read path (NEW FIX):** Arrays returned from Postgres were incorrectly converted to JSON strings, causing "e.map is not a function" errors in Prisma's runtime
+**The Problem:**
+Users encountered "TypeError: e.map is not a function" when using array-typed columns (e.g., `permissions TEXT[]`). The adapter had THREE separate bugs with array handling:
 
-**Changes:**
+1. **Write path (fallback):** Array coercion wasn't applied when no SQL placeholders detected
+2. **Read path (serialization):** Arrays were converted to JSON strings instead of staying as arrays
+3. **Read path (type detection):** `determineColumnTypes` misclassified arrays as JSON columns
+
+**Root Cause (from debugging):**
+```
+determineColumnTypes → marked array as JSON
+  ↓
+queryRaw → called ensureJsonString() instead of serializeValueFast()
+  ↓
+ensureJsonString → JSON.stringify(["ALL"]) → '["ALL"]' (string!)
+  ↓
+Prisma runtime → tried .map() on string → "e.map is not a function" ❌
+```
+
+**The Fix:**
 
 Write Path (sending arrays TO Postgres):
-- Standard adapter: Added array coercion to fallback path in `executeQueryOptimized` and `executeTransactionQueryOptimized`
-- Optimized adapter: Changed `getOrCreateTemplate` to return null instead of throwing when no placeholders are found
-- Both adapters now consistently apply `coerceArgsForPostgres` to all queries with array parameters
+- `executeQueryOptimized` / `executeTransactionQueryOptimized`: Apply `coerceArgsForPostgres` in fallback paths
+- Converts JS arrays to Postgres literals: `["ALL"]` → `'{"ALL"}'`
 
-Read Path (receiving arrays FROM Postgres) - NEW:
-- `serializeValueFast`: Arrays are now returned as-is instead of being JSON.stringify'd
-- `determineColumnTypes`: Arrays are no longer misidentified as JSON columns
-- This ensures Prisma receives actual JavaScript arrays for array-typed columns
+Read Path (receiving arrays FROM Postgres):
+- **`determineColumnTypes`** (CRITICAL FIX): Completely rewritten to NEVER classify arrays as JSON
+  - Checks ALL rows for arrays (not just first row)
+  - Arrays get `UnknownNumber` type → Prisma infers from schema
+  - Only non-array objects are treated as JSON
+- **`serializeValueFast`**: Added explicit Array.isArray() check before JSON.stringify
+  - Arrays → returned as-is (unchanged)
+  - Objects → JSON.stringify (for JSON columns)
+
+**Verified Solution:**
+Debug output confirmed the fix:
+```
+Before: Serializing array: ["ALL"] -> "["ALL"]" isArray? false ❌
+After:  Serializing array: ["ALL"] -> ["ALL"] isArray? true ✅
+```
 
 **Impact:**
-Array-typed columns (text[], int[], etc.) now work correctly in BOTH directions:
-- Writing: `permissions: ["ALL"]` → Postgres array literal `{"ALL"}`
-- Reading: Postgres array `{"ALL"}` → JavaScript array `["ALL"]` (not string `'["ALL"]'`)
+Array-typed columns now work correctly in BOTH directions:
+- Writing: `permissions: ["ALL"]` → Postgres: `{"ALL"}`
+- Reading: Postgres: `{"ALL"}` → JavaScript: `["ALL"]` (actual array, not string)
 
-This fully resolves the "TypeError: e.map is not a function" error.
+Fully resolves: "TypeError: e.map is not a function"
 
 1.1.4 - 2025-10-26
 -------------------
