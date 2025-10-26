@@ -4,10 +4,22 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.5 - 2025-10-26
+-------------------
+
+**Critical Fix:** Array parameter coercion (`coerceArgsForPostgres`) is now applied in ALL code paths, including fallback paths where no SQL placeholders are detected. This resolves the "e.map is not a function" error that occurred when Prisma sent queries with array parameters but without explicit placeholders.
+
+Changes:
+- Standard adapter: Added array coercion to fallback path in `executeQueryOptimized` and `executeTransactionQueryOptimized`
+- Optimized adapter: Changed `getOrCreateTemplate` to return null instead of throwing when no placeholders are found, allowing fallback with array coercion
+- Both adapters now consistently apply `coerceArgsForPostgres` to all queries with array parameters, regardless of placeholder detection
+
+This fix ensures that array-typed columns (e.g., `text[]`, `int[]`) work correctly in all scenarios, including Prisma-generated queries that may embed parameters differently.
+
 1.1.4 - 2025-10-26
 -------------------
 
-Fix: Postgres array parameters for primitive JS arrays are now coerced into valid Postgres array literals when bound through Bun’s SQL template. This resolves “malformed array literal: "ALL"” errors for columns like `text[]` (e.g., `permissions: ["ALL"]`). The coercion applies only to arrays of strings, numbers, booleans, or null; complex/object arrays are left untouched to avoid impacting JSON payloads.
+Fix: Postgres array parameters for primitive JS arrays are now coerced into valid Postgres array literals when bound through Bun's SQL template. This resolves "malformed array literal: "ALL"" errors for columns like `text[]` (e.g., `permissions: ["ALL"]`). The coercion applies only to arrays of strings, numbers, booleans, or null; complex/object arrays are left untouched to avoid impacting JSON payloads.
 
 1.1.3 - 2025-10-25
 -------------------

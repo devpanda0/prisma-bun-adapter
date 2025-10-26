@@ -170,10 +170,10 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
       const strings = this.createTemplateStrings([sql]);
       return connection(strings);
     }
-    
+
     const cacheKey = sql;
     let cached = templateCache.get(cacheKey);
-    
+
     if ((!cached || cached.paramCount !== args.length) && this.hasParameterPlaceholders(sql)) {
       const templateSql = this.convertParameterPlaceholders(sql, args.length);
       const parts = templateSql.split(/\$\{\d+\}/);
@@ -187,15 +187,19 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
       cached = { strings, paramCount: args.length, argOrder };
       templateCache.set(cacheKey, cached);
     }
-    
+
     if (cached) {
       const expanded = cached.argOrder?.length ? cached.argOrder.map((i) => args[i]) : args;
       const finalArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(expanded) : expanded;
       return connection(cached.strings, ...finalArgs);
     }
-    
+
+    // Fallback: Query has args but no recognized placeholders
+    // This can happen with Prisma-generated queries that embed parameters differently
+    // We still need to coerce arrays for Postgres compatibility
+    const coercedArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(args) : args;
     const strings = this.createTemplateStrings([sql]);
-    return connection(strings);
+    return connection(strings, ...coercedArgs);
   }
 
   protected abstract hasParameterPlaceholders(sql: string): boolean;
@@ -533,7 +537,7 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
       const strings = this.createTemplateStrings([sql]);
       return tx(strings);
     }
-    
+
     if (this.hasParameterPlaceholders(sql)) {
       const templateSql = this.convertParameterPlaceholders(sql, args.length);
       const parts = templateSql.split(/\$\{\d+\}/);
@@ -548,9 +552,12 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
       const finalArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(expanded) : expanded;
       return tx(strings, ...finalArgs);
     }
-    
+
+    // Fallback: Transaction query has args but no recognized placeholders
+    // Apply array coercion for Postgres compatibility
+    const coercedArgs = this.provider === 'postgres' ? this.coerceArgsForPostgres(args) : args;
     const strings = this.createTemplateStrings([sql]);
-    return tx(strings);
+    return tx(strings, ...coercedArgs);
   }
 
   protected inferColumnTypeFast(value: unknown): ColumnType {
