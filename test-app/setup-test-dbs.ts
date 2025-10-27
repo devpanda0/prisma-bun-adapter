@@ -15,6 +15,9 @@ export interface DatabaseConfig {
   envVars: Record<string, string>;
   connectionString: string;
   envVarName: string;
+  // Optional server runtime configuration flags, e.g. { max_connections: 200 }
+  // For Postgres, these are passed as: -c key=value
+  serverConfig?: Record<string, string | number>;
 }
 
 export const databases: DatabaseConfig[] = [
@@ -27,6 +30,11 @@ export const databases: DatabaseConfig[] = [
       POSTGRES_USER: "test",
       POSTGRES_PASSWORD: "test",
       POSTGRES_DB: "test_db",
+    },
+    // Increase default connection limit for tests
+    // Override with TEST_POSTGRES_MAX_CONNECTIONS env var
+    serverConfig: {
+      max_connections: process.env.TEST_POSTGRES_MAX_CONNECTIONS || 200
     },
     connectionString: "postgresql://test:test@localhost:5433/test_db",
     envVarName: "TEST_POSTGRES_URL",
@@ -103,7 +111,13 @@ async function startDatabase(db: DatabaseConfig): Promise<boolean> {
 
     // Start the container
     const internalPort = db.name === "PostgreSQL" ? 5432 : db.port;
-    await $`docker run --name ${db.containerName} ${envArgs} -p ${db.port}:${internalPort} -d ${db.image}`.quiet();
+    
+    // Build optional server args (e.g., Postgres: -c max_connections=200)
+    const serverArgs = db.serverConfig
+      ? Object.entries(db.serverConfig).flatMap(([key, value]) => ["-c", `${key}=${value}`])
+      : [];
+
+    await $`docker run --name ${db.containerName} ${envArgs} -p ${db.port}:${internalPort} -d ${db.image} ${serverArgs}`.quiet();
 
     // Wait for the database to be ready
     console.log(`  ⏳ Waiting for ${db.name} to be ready...`);
@@ -132,6 +146,12 @@ async function startDatabase(db: DatabaseConfig): Promise<boolean> {
     }
 
     console.log(`  ✅ ${db.name} is ready!`);
+    if (db.serverConfig && Object.keys(db.serverConfig).length > 0) {
+      console.log("  ⚙️  Server config:");
+      for (const [k, v] of Object.entries(db.serverConfig)) {
+        console.log(`     - ${k}=${v}`);
+      }
+    }
     console.log(`  📝 Connection string: ${db.connectionString}`);
     console.log(`  🔧 Environment variable: export ${db.envVarName}="${db.connectionString}"`);
     
