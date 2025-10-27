@@ -574,10 +574,10 @@ abstract class BaseBunDriverAdapter implements SqlDriverAdapter {
 				}
 			}
 
-			// If ANY row has an array in this column, it's an array column (NOT JSON)
+			// If ANY row has an array in this column, serialize as JSON
+			// so the engine can parse the value back into an array.
 			if (hasArray) {
-				// Return a generic type for arrays - let Prisma handle the specifics
-				types[i] = ColumnTypeEnum.UnknownNumber; // Prisma will infer from schema
+				types[i] = ColumnTypeEnum.Json;
 			} else if (hasOtherObjects) {
 				// Only non-array objects are JSON
 				types[i] = ColumnTypeEnum.Json;

@@ -1,0 +1,18 @@
+// Prisma Client for MySQL used only for comparison tests
+
+generator client {
+  provider = "prisma-client-js"
+  // Output to a local generated folder to avoid clobbering the default client
+  output   = "../generated/mysql-client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("TEST_MYSQL_URL")
+}
+
+// Minimal model just to allow client generation
+model Dummy {
+  id Int @id @default(autoincrement())
+}
+

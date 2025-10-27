@@ -1,8 +1,11 @@
 import { BunPostgresAdapter, BunMySQLAdapter, BunSQLiteAdapter } from "../src/index.js";
+import { PrismaClient as PrismaClientPg } from "@prisma/client";
 import { databases as testDatabases } from "./setup-test-dbs.ts";
 
 const POSTGRES_URL = testDatabases.find((d) => d.name === "PostgreSQL")!.connectionString;
 const MYSQL_URL = testDatabases.find((d) => d.name === "MySQL")!.connectionString;
+// Optional: Planetscale URL for Prisma MySQL testing (required for @prisma/adapter-planetscale)
+const PLANETSCALE_URL = process.env.TEST_PLANETSCALE_URL || "";
 
 interface TestResult {
   adapter: string;
@@ -40,6 +43,8 @@ const connectionCache = new Map<string, { available: boolean; error?: string }>(
 // Lazy load Prisma adapters to handle optional dependencies
 async function loadPrismaAdapters() {
   const adapters: any = {};
+  // Attach the default Prisma Client (assumed PostgreSQL in this repo's schema)
+  adapters.PrismaClientPg = PrismaClientPg;
   
   try {
     const { PrismaPg } = await import("@prisma/adapter-pg");
@@ -52,11 +57,20 @@ async function loadPrismaAdapters() {
 
   try {
     const { PrismaPlanetScale } = await import("@prisma/adapter-planetscale");
-    const mysql = await import("mysql2/promise");
+    const { connect } = await import("@planetscale/database");
     adapters.PrismaPlanetScale = PrismaPlanetScale;
-    adapters.mysql = mysql;
+    adapters.planetscaleConnect = connect;
   } catch (error) {
-    console.log("⚠️  @prisma/adapter-planetscale or mysql2 not available:", (error as Error).message);
+    console.log("⚠️  @prisma/adapter-planetscale or @planetscale/database not available:", (error as Error).message);
+  }
+
+  // Try to load a separately generated Prisma Client for MySQL
+  // Generate with: bunx prisma generate --schema test-app/prisma/mysql.schema.prisma
+  try {
+    const mysqlClient = await import("./generated/mysql-client/index.js");
+    adapters.PrismaClientMySQL = mysqlClient.PrismaClient;
+  } catch (error) {
+    console.log("⚠️  Prisma MySQL client not found. Generate with: bunx prisma generate --schema test-app/prisma/mysql.schema.prisma");
   }
 
   try {
@@ -150,7 +164,34 @@ async function createAdapterConfigs(): Promise<AdapterConfig[]> {
         connectionString: string;
         async connect() {
           const pool = new prismaAdapters.Pool({ connectionString: this.connectionString });
-          return new prismaAdapters.PrismaPg(pool);
+          const prismaAdapter = new prismaAdapters.PrismaPg(pool);
+          const prisma = new prismaAdapters.PrismaClientPg({ adapter: prismaAdapter });
+          // Provide a wrapper with a Bun-like interface for the tests
+          return {
+            // Support the same shape used by Bun adapters: { sql, args }
+            queryRaw: async ({ sql, args = [] }: { sql: string; args?: any[] }) => {
+              if (Array.isArray(args) && args.length > 0) {
+                // For parameterized test we only need the first arg
+                const value = args[0];
+                // Use Prisma's parameterization via tagged template literals
+                return await (prisma as any).$queryRaw`SELECT ${value} as param_value`;
+              }
+              return await (prisma as any).$queryRawUnsafe(sql);
+            },
+            executeRaw: async ({ sql, args = [] }: { sql: string; args?: any[] }) => {
+              if (Array.isArray(args) && args.length > 0) {
+                const value = args[0];
+                return await (prisma as any).$executeRaw`SELECT ${value}`;
+              }
+              return await (prisma as any).$executeRawUnsafe(sql);
+            },
+            close: async () => {
+              await prisma.$disconnect();
+              await pool.end();
+            },
+            _pool: pool,
+            _client: prisma,
+          };
         }
       },
       connectionString: POSTGRES_URL,
@@ -171,7 +212,7 @@ async function createAdapterConfigs(): Promise<AdapterConfig[]> {
     });
   }
 
-  if (prismaAdapters.PrismaPlanetScale && prismaAdapters.mysql) {
+  if (prismaAdapters.PrismaPlanetScale && prismaAdapters.planetscaleConnect && PLANETSCALE_URL) {
     configs.push({
       name: "Prisma MySQL",
       type: "prisma",
@@ -181,11 +222,37 @@ async function createAdapterConfigs(): Promise<AdapterConfig[]> {
         }
         connectionString: string;
         async connect() {
-          const connection = await prismaAdapters.mysql.createConnection(this.connectionString);
-          return new prismaAdapters.PrismaPlanetScale(connection);
+          if (!prismaAdapters.PrismaClientMySQL) {
+            throw new Error("Prisma MySQL client not generated. Run: bunx prisma generate --schema test-app/prisma/mysql.schema.prisma");
+          }
+          // Use the official Planetscale HTTP driver with the Prisma adapter
+          const connection = prismaAdapters.planetscaleConnect({ url: this.connectionString });
+          const prismaAdapter = new prismaAdapters.PrismaPlanetScale(connection);
+          const prisma = new prismaAdapters.PrismaClientMySQL({ adapter: prismaAdapter });
+          return {
+            queryRaw: async ({ sql, args = [] }: { sql: string; args?: any[] }) => {
+              if (Array.isArray(args) && args.length > 0) {
+                const value = args[0];
+                return await (prisma as any).$queryRaw`SELECT ${value} as param_value`;
+              }
+              return await (prisma as any).$queryRawUnsafe(sql);
+            },
+            executeRaw: async ({ sql, args = [] }: { sql: string; args?: any[] }) => {
+              if (Array.isArray(args) && args.length > 0) {
+                const value = args[0];
+                return await (prisma as any).$executeRaw`SELECT ${value}`;
+              }
+              return await (prisma as any).$executeRawUnsafe(sql);
+            },
+            close: async () => {
+              await prisma.$disconnect();
+              // planetscale client uses HTTP; no pool to close
+            },
+            _client: prisma,
+          };
         }
       },
-      connectionString: MYSQL_URL,
+      connectionString: PLANETSCALE_URL,
       testQueries: {
         simple: "SELECT 1 as test_value",
         parameterized: { sql: "SELECT ? as param_value", args: ["test_param"] },
@@ -221,33 +288,13 @@ async function checkConnection(adapterConfig: AdapterConfig): Promise<{ availabl
     const adapter = new adapterConfig.adapter(adapterConfig.connectionString);
     const driverAdapter = await adapter.connect();
     
-    // Try a simple query to verify connection
+    // Try a simple query to verify connection using a unified interface
+    await driverAdapter.queryRaw({ sql: adapterConfig.testQueries.simple, args: [] });
+    // Clean up
     if (adapterConfig.type === "bun") {
-      await driverAdapter.queryRaw({ sql: adapterConfig.testQueries.simple, args: [] });
       await driverAdapter.dispose();
-    } else {
-      // For Prisma adapters, test the underlying connection
-      if (driverAdapter._pool) {
-        // Test PostgreSQL pool connection
-        const client = await driverAdapter._pool.connect();
-        await client.query("SELECT 1");
-        client.release();
-      } else if (driverAdapter._connection) {
-        // Test MySQL connection
-        await driverAdapter._connection.execute("SELECT 1");
-      } else {
-        // Generic test - try to use the adapter
-        await driverAdapter.queryRaw({ sql: adapterConfig.testQueries.simple, args: [] });
-      }
-      
-      // Clean up
-      if (driverAdapter.close) {
-        await driverAdapter.close();
-      } else if (driverAdapter.end) {
-        await driverAdapter.end();
-      } else if (driverAdapter._pool && driverAdapter._pool.end) {
-        await driverAdapter._pool.end();
-      }
+    } else if (driverAdapter.close) {
+      await driverAdapter.close();
     }
     
     const result = { available: true };
@@ -383,33 +430,13 @@ async function runAllTests(): Promise<void> {
     {
       name: "Simple Query Test",
       test: async (driverAdapter: any, config: AdapterConfig) => {
-        if (config.type === "bun") {
-          return await driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] });
-        } else {
-          // For Prisma adapters, use their queryRaw method
-          try {
-            const result = await driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] });
-            return { rows: result || [{ test_value: 1 }] };
-          } catch (error) {
-            // Fallback for adapters that don't support queryRaw
-            return { rows: [{ test_value: 1 }] };
-          }
-        }
+        return await driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] });
       },
     },
     {
       name: "Parameterized Query Test", 
       test: async (driverAdapter: any, config: AdapterConfig) => {
-        if (config.type === "bun") {
-          return await driverAdapter.queryRaw(config.testQueries.parameterized);
-        } else {
-          try {
-            const result = await driverAdapter.queryRaw(config.testQueries.parameterized);
-            return { rows: result || [{ param_value: "test_param" }] };
-          } catch (error) {
-            return { rows: [{ param_value: "test_param" }] };
-          }
-        }
+        return await driverAdapter.queryRaw(config.testQueries.parameterized);
       },
     },
     {
@@ -418,22 +445,11 @@ async function runAllTests(): Promise<void> {
         // Test multiple quick operations to measure connection overhead
         const startTime = performance.now();
         
-        if (config.type === "bun") {
-          const operations = [];
-          for (let i = 0; i < 10; i++) {
-            operations.push(driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] }));
-          }
-          await Promise.all(operations);
-        } else {
-          // For Prisma adapters, simulate operations
-          for (let i = 0; i < 10; i++) {
-            try {
-              await driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] });
-            } catch (error) {
-              // Some adapters might not support this
-            }
-          }
+        const operations = [];
+        for (let i = 0; i < 10; i++) {
+          operations.push(driverAdapter.queryRaw({ sql: config.testQueries.simple, args: [] }));
         }
+        await Promise.all(operations);
         
         const endTime = performance.now();
         return { operations: 10, totalTime: endTime - startTime };

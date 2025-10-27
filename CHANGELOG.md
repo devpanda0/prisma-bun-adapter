@@ -4,6 +4,15 @@ Changelog
 All notable changes to this project will be documented in this file.
 This project adheres to Semantic Versioning.
 
+1.1.5 - 2025-10-27
+-------------------
+
+- Postgres arrays: correctly classify result columns that contain arrays as JSON so the Prisma engine parses them back into arrays. Fixes errors like:
+  `Conversion failed: expected a either an i64 or a f64 in column 'labels', found ["ALL","READ","WRITE"]` when selecting array-typed columns.
+- Preserve write-path behavior from 1.1.4: primitive JS arrays (string/number/boolean/null) are still coerced to valid Postgres array literals on bind across both adapters (standard and optimized).
+- Fallback arg handling: if queries/transactions provide args but no recognized placeholders (e.g., certain Prisma-generated SQL), still pass the args and apply Postgres array coercion to maintain compatibility.
+- Tests: add comprehensive array round‑trip coverage (text[], int[], boolean[]) and `ANY()` comparisons.
+
 1.1.4 - 2025-10-26
 -------------------
 
