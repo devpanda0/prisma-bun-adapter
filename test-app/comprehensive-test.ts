@@ -268,6 +268,75 @@ class AdapterTester {
     });
   }
 
+  async testPostgresArrays() {
+    console.log("\n🧰 Testing Postgres Array Parameters");
+    console.log("=".repeat(40));
+
+    // Ensure a simple table for array tests exists
+    await this.runTest("Create array test table", async () => {
+      await prisma.$executeRaw`
+        CREATE TABLE IF NOT EXISTS array_tests (
+          id SERIAL PRIMARY KEY,
+          labels TEXT[],
+          nums   INT[],
+          flags  BOOLEAN[]
+        )
+      `;
+    });
+
+    await this.runTest("Insert primitive arrays (text/int/bool)", async () => {
+      const labels = ["ALL", "READ", "WRITE"]; // text[]
+      const nums = [1, 2, 3];                     // int[]
+      const flags = [true, false, true];           // boolean[]
+
+      // Core of PR: passing primitive JS arrays should coerce to proper
+      // Postgres array literals rather than JSON strings.
+      const affected = await prisma.$executeRaw`
+        INSERT INTO array_tests(labels, nums, flags)
+        VALUES (${labels}, ${nums}, ${flags})
+      `;
+      if (!affected) throw new Error("No rows inserted");
+    });
+
+    await this.runTest("Select back arrays and shape", async () => {
+      const rows = await prisma.$queryRaw<{ labels: string[]; nums: number[]; flags: boolean[] }[]>`
+        SELECT labels, nums, flags FROM array_tests
+        ORDER BY id DESC
+        LIMIT 1
+      `;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new Error("No rows returned");
+      }
+      const row = rows[0];
+      if (!Array.isArray(row.labels) || !Array.isArray(row.nums) || !Array.isArray(row.flags)) {
+        throw new Error("Returned columns are not arrays");
+      }
+      const expectLabels = ["ALL", "READ", "WRITE"];
+      const expectNums = [1, 2, 3];
+      const expectFlags = [true, false, true];
+      if (JSON.stringify(row.labels) !== JSON.stringify(expectLabels)) {
+        throw new Error(`labels mismatch: ${JSON.stringify(row.labels)}`);
+      }
+      if (JSON.stringify(row.nums) !== JSON.stringify(expectNums)) {
+        throw new Error(`nums mismatch: ${JSON.stringify(row.nums)}`);
+      }
+      if (JSON.stringify(row.flags) !== JSON.stringify(expectFlags)) {
+        throw new Error(`flags mismatch: ${JSON.stringify(row.flags)}`);
+      }
+    });
+
+    await this.runTest("Array parameter in WHERE ANY()", async () => {
+      const probe = "ALL";
+      const set = ["NONE", "ALL", "READ"];
+      const rows = await prisma.$queryRaw<{ ok: boolean }[]>`
+        SELECT ${probe} = ANY(${set}::text[]) as ok
+      `;
+      if (!rows?.[0]?.ok) {
+        throw new Error("ANY(array) comparison failed");
+      }
+    });
+  }
+
   async testTransactions() {
     console.log("\n💳 Testing Transactions");
     console.log("=" .repeat(40));
@@ -522,6 +591,7 @@ class AdapterTester {
     await this.testBasicQueries();
     await this.testCrudOperations();
     await this.testRawQueries();
+    await this.testPostgresArrays();
     await this.testTransactions();
     await this.testPerformance();
     await this.testEdgeCases();
