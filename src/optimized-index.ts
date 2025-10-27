@@ -899,12 +899,13 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
 	): ColumnType[] {
 		const columnCount = columnNames.length;
 		const types = new Array(columnCount) as ColumnType[];
+
 		for (let i = 0; i < columnCount; i++) {
 			const name = columnNames[i];
 
-			// Check if column contains arrays (must check ALL rows, not just first)
 			let hasArray = false;
 			let hasOtherObjects = false;
+			let arrayElementType: ColumnType | null = null;
 
 			for (let r = 0; r < result.length; r++) {
 				const v = result[r][name];
@@ -912,7 +913,10 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
 
 				if (Array.isArray(v)) {
 					hasArray = true;
-					break; // Found an array, stop checking
+					if (v.length > 0 && arrayElementType === null) {
+						arrayElementType = this.inferColumnTypeFast(v[0]);
+					}
+					break;
 				} else if (
 					typeof v === "object" &&
 					!(v instanceof Date) &&
@@ -922,18 +926,38 @@ export class OptimizedBunPostgresDriverAdapter implements SqlDriverAdapter {
 				}
 			}
 
-			// If ANY row has an array in this column, serialize as JSON
-			// so the engine can parse the value back into an array.
-			if (hasArray) {
-				types[i] = ColumnTypeEnum.Json;
+			if (hasArray && arrayElementType !== null) {
+				// Map base type to array type
+				const arrayTypeMap: Record<number, ColumnType> = {
+					[ColumnTypeEnum.Int32]: ColumnTypeEnum.Int32Array,
+					[ColumnTypeEnum.Int64]: ColumnTypeEnum.Int64Array,
+					[ColumnTypeEnum.Float]: ColumnTypeEnum.FloatArray,
+					[ColumnTypeEnum.Double]: ColumnTypeEnum.DoubleArray,
+					[ColumnTypeEnum.Numeric]: ColumnTypeEnum.NumericArray,
+					[ColumnTypeEnum.Boolean]: ColumnTypeEnum.BooleanArray,
+					[ColumnTypeEnum.Character]: ColumnTypeEnum.CharacterArray,
+					[ColumnTypeEnum.Text]: ColumnTypeEnum.TextArray,
+					[ColumnTypeEnum.Date]: ColumnTypeEnum.DateArray,
+					[ColumnTypeEnum.Time]: ColumnTypeEnum.TimeArray,
+					[ColumnTypeEnum.DateTime]: ColumnTypeEnum.DateTimeArray,
+					[ColumnTypeEnum.Json]: ColumnTypeEnum.JsonArray,
+					[ColumnTypeEnum.Enum]: ColumnTypeEnum.EnumArray,
+					[ColumnTypeEnum.Bytes]: ColumnTypeEnum.BytesArray,
+					[ColumnTypeEnum.Uuid]: ColumnTypeEnum.UuidArray,
+				};
+
+				types[i] = arrayTypeMap[arrayElementType] ?? ColumnTypeEnum.JsonArray;
+				
+			} else if (hasArray) {
+				// Empty array or couldn't determine type
+				types[i] = ColumnTypeEnum.JsonArray;
 			} else if (hasOtherObjects) {
-				// Only non-array objects are JSON
 				types[i] = ColumnTypeEnum.Json;
 			} else {
-				// Fallback to type inference
 				types[i] = this.inferColumnTypeFast(result[0]?.[name]);
 			}
 		}
+
 		return types;
 	}
 
